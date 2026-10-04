@@ -1,0 +1,16 @@
+.Rhistory
+.RData
+.Ruserdata
+.Renviron
+.Rproj.user/
+.DS_Store
+
+# Project-local package library
+renv/library/
+renv/staging/
+renv/python/
+renv/local/
+.bootstrap-library/
+
+# Rendered output can always be rebuilt from the R Markdown source
+practice.html
