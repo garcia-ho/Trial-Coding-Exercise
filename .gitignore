@@ -13,4 +13,6 @@ renv/local/
 .bootstrap-library/
 
 # Rendered output can always be rebuilt from the R Markdown source
-practice.html
+CRM.html
+CRM_cache/
+CRM_files/

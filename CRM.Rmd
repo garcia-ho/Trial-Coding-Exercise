@@ -1,0 +1,309 @@
+---
+title: "Continual Reassessment Method: Simulation Practice"
+author: ""
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 8,
+  fig.height = 5,
+  fig.align = "center"
+)
+source("R/crm_functions.R")
+```
+
+# Purpose
+
+This coding exercise implements a one-parameter Bayesian continual reassessment
+method (CRM). It covers data generation, multiple skeletons, grid and MCMC
+posterior computation, sequential dose assignment, BMA-CRM, and operating
+characteristics under several true dose-toxicity scenarios.
+
+The code is intentionally transparent and uses base R. It is for learning and
+is **not validated software for conducting a clinical trial**.
+
+# Design settings and data-generating scenarios
+
+We use six ordered dose levels, a target DLT probability of 0.25, cohorts of
+three, and 24 patients. The true MTD is the dose whose DLT probability is
+closest to the target.
+
+```{r design-settings}
+target <- 0.25
+n_dose <- 6L
+n_patients <- 24L
+cohort_size <- 3L
+prior_mtd <- 3L
+
+scenarios <- list(
+  "MTD at dose 2" = c(0.08, 0.23, 0.38, 0.55, 0.68, 0.80),
+  "MTD at dose 4" = c(0.04, 0.08, 0.14, 0.24, 0.38, 0.55),
+  "MTD at dose 5" = c(0.02, 0.05, 0.09, 0.14, 0.23, 0.36)
+)
+
+scenario_table <- data.frame(
+  scenario = rep(names(scenarios), each = n_dose),
+  dose = rep(seq_len(n_dose), times = length(scenarios)),
+  true_dlt_probability = unlist(scenarios, use.names = FALSE)
+)
+knitr::kable(scenario_table, digits = 2)
+```
+
+# CRM working model
+
+For skeleton probabilities \(p_1 < \cdots < p_J\), we use the power model
+
+\[
+\Pr(Y=1\mid d_j,\alpha)=p_j^{\exp(\alpha)},
+\qquad \alpha\sim N(0,2),
+\]
+
+where 2 is the prior variance. After each cohort, the next dose is the level
+whose posterior mean DLT probability is closest to the target. Dose movement is
+limited to one level per cohort.
+
+Sequential decisions use deterministic grid integration. MCMC is demonstrated
+separately, avoiding simulation decisions that depend on Monte Carlo noise.
+
+# Lee-Cheung indifference-interval skeletons
+
+Lee and Cheung (2009) specify an indifference interval
+\((\phi-\delta,\phi+\delta)\) around target \(\phi\). Given prior MTD location
+\(\nu\), set \(p_\nu=\phi\) and use
+
+\[
+p_{j-1}=\exp\left\{
+\frac{\log(\phi-\delta)\log(p_j)}{\log(\phi+\delta)}
+\right\},
+\]
+
+\[
+p_{j+1}=\exp\left\{
+\frac{\log(\phi+\delta)\log(p_j)}{\log(\phi-\delta)}
+\right\}.
+\]
+
+A smaller \(\delta\) gives a more closely spaced skeleton. We compare three
+prespecified values and assess them through finite-sample simulations.
+
+```{r construct-skeletons}
+deltas <- c(0.04, 0.07, 0.10)
+skeletons <- lapply(deltas, function(delta) {
+  lee_cheung_skeleton(target, delta, n_dose, prior_mtd)
+})
+names(skeletons) <- paste0("CRM delta=", sprintf("%.02f", deltas))
+
+skeleton_table <- data.frame(
+  dose = seq_len(n_dose),
+  do.call(cbind, skeletons),
+  check.names = FALSE
+)
+knitr::kable(skeleton_table, digits = 3)
+```
+
+```{r skeleton-plot, fig.cap="Three Lee-Cheung skeletons."}
+plot_crm_skeletons(skeletons, target)
+```
+
+# One illustrative CRM trial
+
+```{r one-crm-trial}
+example_truth <- scenarios[["MTD at dose 4"]]
+example_skeleton <- skeletons[[2L]]
+
+example_trial <- run_crm_trial(
+  true_probabilities = example_truth,
+  skeleton = example_skeleton,
+  target = target,
+  n_patients = n_patients,
+  cohort_size = cohort_size,
+  start_dose = 1L,
+  seed = 104L
+)
+
+example_trial$selected_dose
+example_trial$allocation
+```
+
+```{r crm-trial-plots, fig.height=4.5, fig.cap="Allocation path and final posterior toxicity estimates for one CRM trial."}
+old_parameters <- par(mfrow = c(1, 2), mar = c(4, 4, 3, 1))
+plot_trial_path(example_trial)
+title("CRM allocation path")
+plot_posterior_toxicity(
+  example_trial$fit$posterior_toxicity,
+  example_truth,
+  target,
+  main = "CRM posterior"
+)
+par(old_parameters)
+```
+
+# MCMC posterior calculation
+
+`crm_mcmc()` uses random-walk Metropolis sampling for \(\alpha\). The grid and
+MCMC posterior DLT estimates should be similar apart from Monte Carlo error.
+
+```{r mcmc-fit}
+mcmc_fit <- crm_mcmc(
+  dose = example_trial$history$dose,
+  dlt = example_trial$history$dlt,
+  skeleton = example_skeleton,
+  n_iter = 12000L,
+  burn = 2000L,
+  thin = 5L,
+  proposal_sd = 0.35,
+  seed = 902L
+)
+
+mcmc_comparison <- data.frame(
+  dose = seq_len(n_dose),
+  grid_posterior_mean = example_trial$fit$posterior_toxicity,
+  mcmc_posterior_mean = mcmc_fit$posterior_toxicity
+)
+knitr::kable(mcmc_comparison, digits = 3)
+mcmc_fit$acceptance_rate
+```
+
+```{r mcmc-diagnostics, fig.cap="MCMC trace and retained posterior samples."}
+plot_crm_mcmc(mcmc_fit)
+```
+
+# BMA-CRM across all skeletons
+
+Yin and Yuan's BMA-CRM regards each skeleton as a model \(M_k\). Its posterior
+model probabilities are
+
+\[
+\Pr(M_k\mid D)=
+\frac{\Pr(M_k)\int L(D\mid\alpha_k,M_k)f(\alpha_k\mid M_k)d\alpha_k}
+{\sum_l\Pr(M_l)\int L(D\mid\alpha_l,M_l)f(\alpha_l\mid M_l)d\alpha_l}.
+\]
+
+The BMA toxicity estimate is
+
+\[
+\widehat\pi_j^{\mathrm{BMA}}
+=\sum_k\Pr(M_k\mid D)\widehat\pi_{kj}.
+\]
+
+Thus all prespecified skeletons contribute, with more posterior weight assigned
+to skeletons that better explain the accumulated DLT observations.
+
+```{r one-bma-trial}
+bma_trial <- run_bma_crm_trial(
+  true_probabilities = example_truth,
+  skeletons = skeletons,
+  target = target,
+  n_patients = n_patients,
+  cohort_size = cohort_size,
+  start_dose = 1L,
+  seed = 104L
+)
+
+bma_weights <- data.frame(
+  skeleton = names(skeletons),
+  posterior_model_probability = bma_trial$fit$posterior_model_weights
+)
+knitr::kable(bma_weights, digits = 3)
+bma_trial$selected_dose
+```
+
+```{r bma-plots, fig.height=4.5, fig.cap="BMA-CRM allocation, evolving model weights, and posterior estimates."}
+old_parameters <- par(mfrow = c(1, 3), mar = c(4, 4, 3, 1))
+plot_trial_path(bma_trial)
+title("BMA-CRM path")
+plot_bma_weights(bma_trial)
+title("Skeleton weights")
+plot_posterior_toxicity(
+  bma_trial$fit$posterior_toxicity,
+  example_truth,
+  target,
+  main = "BMA posterior"
+)
+par(old_parameters)
+```
+
+# Simulation study
+
+The study compares each single-skeleton CRM with BMA-CRM under all three true
+scenarios. Increase `n_sim` for greater Monte Carlo precision.
+
+```{r simulation-study, cache=TRUE}
+n_sim <- 100L
+
+simulation_results <- simulate_crm_designs(
+  scenarios = scenarios,
+  skeletons = skeletons,
+  target = target,
+  n_sim = n_sim,
+  n_patients = n_patients,
+  cohort_size = cohort_size,
+  start_dose = 1L,
+  seed = 20261004L
+)
+
+simulation_summary <- summarize_crm_simulations(
+  simulation_results,
+  n_dose,
+  n_patients
+)
+
+operating_table <- simulation_summary$operating
+operating_table$probability_correct_selection <- round(
+  operating_table$probability_correct_selection, 3
+)
+operating_table$mean_dlt_rate <- round(operating_table$mean_dlt_rate, 3)
+knitr::kable(operating_table)
+```
+
+```{r operating-characteristics, fig.height=5.5, fig.cap="Correct MTD selection and observed DLT rate."}
+plot_operating_metrics(simulation_summary)
+```
+
+```{r selection-probabilities, fig.height=8, fig.cap="Final dose-selection probabilities under each scenario."}
+old_parameters <- par(mfrow = c(3, 1), mar = c(4, 4, 3, 1))
+for (scenario_name in names(scenarios)) {
+  plot_selection_probabilities(simulation_summary, scenario_name)
+}
+par(old_parameters)
+```
+
+```{r allocation-proportions, fig.height=8, fig.cap="Average patient allocation under each scenario."}
+old_parameters <- par(mfrow = c(3, 1), mar = c(4, 4, 3, 1))
+for (scenario_name in names(scenarios)) {
+  plot_allocation_proportions(simulation_summary, scenario_name)
+}
+par(old_parameters)
+```
+
+# Suggested extensions
+
+- Increase `n_sim` to 1,000 and assess Monte Carlo stability.
+- Change the prior MTD and indifference-interval half-widths.
+- Add a conservative overdose stopping rule.
+- Compare cohort sizes of one and three.
+- Add a scenario in which every dose is above the target.
+- Compare several MCMC proposal standard deviations.
+
+# References
+
+- Lee, S. M. and Cheung, Y. K. (2009). “Model calibration in the continual
+  reassessment method.” *Clinical Trials*, 6(3), 227–238.
+  [doi:10.1177/1740774509105076](https://doi.org/10.1177/1740774509105076)
+- O'Quigley, J., Pepe, M., and Fisher, L. (1990). “Continual reassessment
+  method: a practical design for phase I clinical trials in cancer.”
+  *Biometrics*, 46(1), 33–48.
+- Yin, G. and Yuan, Y. (2009). “Bayesian model averaging continual
+  reassessment method in phase I clinical trials.” *Journal of the American
+  Statistical Association*, 104(487), 954–968.
+  [doi:10.1198/jasa.2009.ap08425](https://doi.org/10.1198/jasa.2009.ap08425)

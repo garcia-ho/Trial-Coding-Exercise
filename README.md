@@ -1,15 +1,17 @@
 # Phase I dose-finding practice
 
-A small R project for practicing CRM, BOIN, and other Phase I dose-finding
-methods.
+A small R project for practicing the continual reassessment method (CRM),
+indifference-interval skeleton calibration, MCMC, and BMA-CRM.
 
 ## Files
 
-- `practice.Rmd`: the main notebook for notes and executable R code chunks
-- `R/`: reusable R function files
+- `CRM.Rmd`: executable CRM tutorial and simulation study
+- `R/crm_functions.R`: reusable, commented functions called by the notebook
 - `data/`: exercise datasets
 
-Open `phase1-dose-finding.Rproj`, then open `practice.Rmd`. Run an individual
+Open `phase1-dose-finding.Rproj`, then open `CRM.Rmd`. Run an individual
 chunk with its green play button or render the full notebook with **Knit**.
 
-Add dose-finding packages such as `dfcrm` or `BOIN` as exercises need them.
+The exercise uses base R plus `knitr` and `rmarkdown`; no dose-finding package
+is required. The implementation is educational and is not validated software
+for conducting a clinical trial.
