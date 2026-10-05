@@ -148,10 +148,44 @@ plot_posterior_toxicity(
 par(old_parameters)
 ```
 
+## Clinical interpretation of truth and posterior mean
+
+The **truth** line: For example, a true probability of 0.24 at dose 4 means that
+each simulated patient assigned to dose 4 has a 24% chance of a DLT. 
+
+The **posterior mean** line is the CRM's current estimate after combining the
+skeleton, the prior for \(\alpha\), and the DLT observations. At dose \(j\), it
+is
+
+\[
+\widehat\pi_j=E\left[p_j^{\exp(\alpha)}\mid D\right]
+=\int p_j^{\exp(\alpha)}f(\alpha\mid D)d\alpha.
+\]
+
+Clinically, if the posterior mean is below the truth, the
+model is underestimating toxicity.Either discrepancy can change which dose appears closest
+to the target. A real protocol should therefore also use prespecified safety
+rules and posterior uncertainty, not just the posterior mean.
+
 # MCMC posterior calculation
 
 `crm_mcmc()` uses random-walk Metropolis sampling for \(\alpha\). The grid and
 MCMC posterior DLT estimates should be similar apart from Monte Carlo error.
+
+## Grid integration versus MCMC
+
+Both methods target the same posterior distribution; they differ only in how
+the integral is approximated.
+
+- **Grid integration** evaluates the posterior kernel at 801 fixed values of
+  \(\alpha\) between -4 and 4, normalizes their weights, and calculates
+  \(\widehat\pi_j\) as a weighted sum. For this one-parameter model it is fast and stable.
+
+- **MCMC** draws samples  from the posterior distribution\(f(\alpha\mid D)\). It estimates the same quantity with
+  \(S^{-1}\sum_{s=1}^S p_j^{\exp(\alpha_s)}\). 
+
+Grid integration is therefore used for the repeated interim decisions in this
+exercise. 
 
 ```{r mcmc-fit}
 mcmc_fit <- crm_mcmc(
@@ -238,8 +272,54 @@ par(old_parameters)
 The study compares each single-skeleton CRM with BMA-CRM under all three true
 scenarios. Increase `n_sim` for greater Monte Carlo precision.
 
+## How the simulation probabilities are calculated
+
+For scenario \(s\), let \(\pi_{sj}\) be the true DLT probability at dose \(j\).
+The simulation defines the true MTD as
+
+\[
+j_s^*=\arg\min_j |\pi_{sj}-\phi|.
+\]
+
+Within simulated trial \(r\), binary outcomes are independently generated as
+
+\[
+Y_{ir}\sim\operatorname{Bernoulli}(\pi_{s,d_{ir}}),
+\]
+
+where \(d_{ir}\) is the dose assigned by the evolving CRM. At the end of the
+trial, the selected dose is
+
+\[
+\widehat j_{sr}=\arg\min_j|\widehat\pi_{srj}-\phi|,
+\]
+
+using either the single-skeleton posterior mean or the BMA posterior mean. With
+\(R\) simulated trials, the reported metrics are:
+
+\[
+\operatorname{PCS}_s=\frac{1}{R}\sum_{r=1}^R
+I(\widehat j_{sr}=j_s^*),
+\]
+
+\[
+\Pr(\text{select dose }j)=\frac{1}{R}\sum_{r=1}^R
+I(\widehat j_{sr}=j),
+\]
+
+\[
+\text{mean DLT rate}=\frac{1}{Rn}\sum_{r=1}^R\sum_{i=1}^nY_{ir},
+\qquad
+\text{allocation proportion}_j=
+\frac{1}{Rn}\sum_{r=1}^R\sum_{i=1}^nI(d_{ir}=j).
+\]
+
+These are Monte Carlo estimates. With only 100 simulations they will vary
+somewhat if the seed changes; a confirmatory design study would normally use
+many more replicates and report Monte Carlo standard errors.
+
 ```{r simulation-study, cache=TRUE}
-n_sim <- 100L
+n_sim <- 1000L
 
 simulation_results <- simulate_crm_designs(
   scenarios = scenarios,
@@ -278,6 +358,92 @@ for (scenario_name in names(scenarios)) {
 par(old_parameters)
 ```
 
+## Three starting-dose allocation plans: 3 x 3 x 3 comparison
+
+CRM does not fix the final number of patients at each dose. After an initial
+starting-dose group, allocation adapts to the observed DLTs. A practical design
+choice is how much safety information to collect at the starting dose before
+the first model-based reassessment. We compare:
+
+1. **3-patient run-in:** the current design; update after the first cohort;
+2. **6-patient run-in:** observe six patients at dose 1 before adapting; and
+3. **9-patient run-in:** a deliberately cautious plan with nine patients at
+   dose 1 before adapting.
+
+All plans retain 24 total patients and use cohorts of three after the run-in.
+Larger run-ins should put more patients at early doses and may reduce early
+toxicity, but they leave fewer patients for learning near a higher true MTD.
+They illustrate a clinically meaningful safety-efficiency tradeoff rather than
+three fixed allocations.
+
+Crossing 3 run-in plans, 3 true scenarios, and 3 skeletons produces 27 settings.
+BMA-CRM is left out of this factorial display because it combines the three
+skeletons rather than representing a fourth skeleton.
+
+```{r run-in-factorial-simulation, cache=TRUE}
+run_in_sizes <- c(3L, 6L, 9L)
+
+factorial_results <- simulate_crm_run_in_plans(
+  scenarios = scenarios,
+  skeletons = skeletons,
+  target = target,
+  run_in_sizes = run_in_sizes,
+  n_sim = n_sim,
+  n_patients = n_patients,
+  cohort_size = cohort_size,
+  start_dose = 1L,
+  seed = 20261005L
+)
+
+factorial_summary <- summarize_crm_run_in_plans(
+  factorial_results,
+  n_patients
+)
+factorial_table <- factorial_summary
+numeric_columns <- c(
+  "probability_correct_selection",
+  "mean_dlt_rate",
+  "mean_low_dose_allocation"
+)
+factorial_table[numeric_columns] <- lapply(
+  factorial_table[numeric_columns], round, digits = 3
+)
+factorial_table <- factorial_table[order(
+  factorial_table$design,
+  factorial_table$scenario,
+  factorial_table$run_in_size
+), ]
+knitr::kable(factorial_table, row.names = FALSE)
+```
+
+Each heatmap panel is one skeleton. Rows are the three true scenarios, columns
+are the three run-in plans, and each printed cell is the estimated metric.
+
+```{r run-in-pcs-heatmap, fig.width=12, fig.height=5.5, fig.cap="Probability of correct MTD selection across the 27 settings."}
+plot_crm_factorial_heatmaps(
+  factorial_summary,
+  metric = "probability_correct_selection",
+  title = "Probability of correct MTD selection"
+)
+```
+
+```{r run-in-allocation-heatmap, fig.width=12, fig.height=5.5, fig.cap="Mean proportion assigned to dose levels 1 or 2 across the 27 settings."}
+plot_crm_factorial_heatmaps(
+  factorial_summary,
+  metric = "mean_low_dose_allocation",
+  title = "Mean allocation to dose levels 1 or 2"
+)
+```
+
+```{r run-in-dlt-heatmap, fig.width=12, fig.height=5.5, fig.cap="Mean observed DLT rate across the 27 settings."}
+plot_crm_factorial_heatmaps(
+  factorial_summary,
+  metric = "mean_dlt_rate",
+  title = "Mean observed DLT rate",
+  zlim = c(0, max(factorial_summary$mean_dlt_rate))
+)
+```
+
 ```{r allocation-proportions, fig.height=8, fig.cap="Average patient allocation under each scenario."}
 old_parameters <- par(mfrow = c(3, 1), mar = c(4, 4, 3, 1))
 for (scenario_name in names(scenarios)) {
@@ -294,16 +460,3 @@ par(old_parameters)
 - Compare cohort sizes of one and three.
 - Add a scenario in which every dose is above the target.
 - Compare several MCMC proposal standard deviations.
-
-# References
-
-- Lee, S. M. and Cheung, Y. K. (2009). “Model calibration in the continual
-  reassessment method.” *Clinical Trials*, 6(3), 227–238.
-  [doi:10.1177/1740774509105076](https://doi.org/10.1177/1740774509105076)
-- O'Quigley, J., Pepe, M., and Fisher, L. (1990). “Continual reassessment
-  method: a practical design for phase I clinical trials in cancer.”
-  *Biometrics*, 46(1), 33–48.
-- Yin, G. and Yuan, Y. (2009). “Bayesian model averaging continual
-  reassessment method in phase I clinical trials.” *Journal of the American
-  Statistical Association*, 104(487), 954–968.
-  [doi:10.1198/jasa.2009.ap08425](https://doi.org/10.1198/jasa.2009.ap08425)

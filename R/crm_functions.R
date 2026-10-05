@@ -97,10 +97,28 @@ generate_dlt <- function(true_probability, n_patients) {
   rbinom(n_patients, 1L, true_probability)
 }
 
+# Build sequential cohort sizes. The first run_in_size patients are treated at
+# the starting dose before the first model-based reassessment.
+make_cohort_sizes <- function(n_patients, cohort_size, run_in_size) {
+  stopifnot(
+    n_patients >= 1L, cohort_size >= 1L, run_in_size >= 1L,
+    run_in_size <= n_patients
+  )
+  sizes <- run_in_size
+  remaining <- n_patients - run_in_size
+  while (remaining > 0L) {
+    next_size <- min(cohort_size, remaining)
+    sizes <- c(sizes, next_size)
+    remaining <- remaining - next_size
+  }
+  sizes
+}
+
 # Simulate one cohort-based, single-skeleton CRM trial.
 run_crm_trial <- function(
     true_probabilities, skeleton, target, n_patients = 24L,
-    cohort_size = 3L, start_dose = 1L, prior_sd = sqrt(1.34), seed = NULL) {
+    cohort_size = 3L, start_dose = 1L, run_in_size = cohort_size,
+    prior_sd = sqrt(2), seed = NULL) {
   stopifnot(length(true_probabilities) == length(skeleton))
   stopifnot(all(diff(true_probabilities) >= 0))
   if (!is.null(seed)) set.seed(seed)
@@ -109,11 +127,12 @@ run_crm_trial <- function(
   history <- data.frame(
     patient = integer(), cohort = integer(), dose = integer(), dlt = integer()
   )
-  starts <- seq.int(1L, n_patients, by = cohort_size)
+  cohort_sizes <- make_cohort_sizes(n_patients, cohort_size, run_in_size)
+  starts <- cumsum(c(1L, head(cohort_sizes, -1L)))
 
-  for (cohort in seq_along(starts)) {
+  for (cohort in seq_along(cohort_sizes)) {
     first <- starts[cohort]
-    cohort_n <- min(cohort_size, n_patients - first + 1L)
+    cohort_n <- cohort_sizes[cohort]
     outcomes <- generate_dlt(true_probabilities[current], cohort_n)
     history <- rbind(history, data.frame(
       patient = seq.int(first, length.out = cohort_n), cohort = cohort,
@@ -142,7 +161,7 @@ run_crm_trial <- function(
 # MCMC is used for learning and diagnostics; simulation decisions use the grid.
 crm_mcmc <- function(
     dose, dlt, skeleton, n_iter = 12000L, burn = 2000L, thin = 5L,
-    proposal_sd = 0.35, prior_mean = 0, prior_sd = sqrt(1.34), seed = NULL) {
+    proposal_sd = 0.35, prior_mean = 0, prior_sd = sqrt(2), seed = NULL) {
   stopifnot(n_iter > burn, thin >= 1L, proposal_sd > 0)
   if (!is.null(seed)) set.seed(seed)
 
@@ -182,7 +201,7 @@ crm_mcmc <- function(
 # posterior model probabilities based on integrated marginal likelihoods.
 bma_crm_posterior <- function(
     dose, dlt, skeletons, prior_model_weights = NULL,
-    prior_sd = sqrt(1.34), alpha_grid = seq(-4, 4, length.out = 801L)) {
+    prior_sd = sqrt(2), alpha_grid = seq(-4, 4, length.out = 801L)) {
   stopifnot(length(skeletons) >= 2L)
   n_models <- length(skeletons)
   if (is.null(prior_model_weights)) {
@@ -214,8 +233,8 @@ bma_crm_posterior <- function(
 # Simulate one BMA-CRM trial and retain model weights after every cohort.
 run_bma_crm_trial <- function(
     true_probabilities, skeletons, target, n_patients = 24L,
-    cohort_size = 3L, start_dose = 1L, prior_model_weights = NULL,
-    prior_sd = sqrt(1.34), seed = NULL) {
+    cohort_size = 3L, start_dose = 1L, run_in_size = cohort_size,
+    prior_model_weights = NULL, prior_sd = sqrt(2), seed = NULL) {
   stopifnot(all(vapply(skeletons, length, integer(1L)) ==
                   length(true_probabilities)))
   if (!is.null(seed)) set.seed(seed)
@@ -224,13 +243,14 @@ run_bma_crm_trial <- function(
   history <- data.frame(
     patient = integer(), cohort = integer(), dose = integer(), dlt = integer()
   )
-  starts <- seq.int(1L, n_patients, by = cohort_size)
-  weight_history <- matrix(NA_real_, length(starts), length(skeletons),
+  cohort_sizes <- make_cohort_sizes(n_patients, cohort_size, run_in_size)
+  starts <- cumsum(c(1L, head(cohort_sizes, -1L)))
+  weight_history <- matrix(NA_real_, length(cohort_sizes), length(skeletons),
                            dimnames = list(NULL, names(skeletons)))
 
-  for (cohort in seq_along(starts)) {
+  for (cohort in seq_along(cohort_sizes)) {
     first <- starts[cohort]
-    cohort_n <- min(cohort_size, n_patients - first + 1L)
+    cohort_n <- cohort_sizes[cohort]
     outcomes <- generate_dlt(true_probabilities[current], cohort_n)
     history <- rbind(history, data.frame(
       patient = seq.int(first, length.out = cohort_n), cohort = cohort,
@@ -260,7 +280,8 @@ run_bma_crm_trial <- function(
 # Compare every single-skeleton CRM and BMA-CRM over multiple true scenarios.
 simulate_crm_designs <- function(
     scenarios, skeletons, target, n_sim = 100L, n_patients = 24L,
-    cohort_size = 3L, start_dose = 1L, seed = 20261004L) {
+    cohort_size = 3L, start_dose = 1L, seed = 20261004L,
+    run_in_size = cohort_size) {
   set.seed(seed)
   design_names <- c(names(skeletons), "BMA-CRM")
   records <- vector("list", length(scenarios) * length(design_names) * n_sim)
@@ -273,10 +294,12 @@ simulate_crm_designs <- function(
       for (simulation in seq_len(n_sim)) {
         trial <- if (design == "BMA-CRM") {
           run_bma_crm_trial(truth, skeletons, target, n_patients,
-                            cohort_size, start_dose)
+                            cohort_size, start_dose,
+                            run_in_size = run_in_size)
         } else {
           run_crm_trial(truth, skeletons[[design]], target, n_patients,
-                        cohort_size, start_dose)
+                        cohort_size, start_dose,
+                        run_in_size = run_in_size)
         }
         index <- index + 1L
         records[[index]] <- data.frame(
@@ -291,6 +314,80 @@ simulate_crm_designs <- function(
     }
   }
   do.call(rbind, records)
+}
+
+# Cross three starting-dose run-in plans with all truth scenarios and
+# skeletons. BMA is excluded so 3 plans x 3 scenarios x 3 skeletons produces
+# the requested 27 design settings.
+simulate_crm_run_in_plans <- function(
+    scenarios, skeletons, target, run_in_sizes = c(3L, 6L, 9L),
+    n_sim = 100L, n_patients = 24L, cohort_size = 3L,
+    start_dose = 1L, seed = 20261004L) {
+  stopifnot(length(run_in_sizes) == 3L)
+  set.seed(seed)
+  plan_names <- paste0(run_in_sizes, "-patient run-in")
+  records <- vector(
+    "list",
+    length(run_in_sizes) * length(scenarios) * length(skeletons) * n_sim
+  )
+  index <- 0L
+
+  for (plan_index in seq_along(run_in_sizes)) {
+    run_in_size <- run_in_sizes[plan_index]
+    for (scenario_name in names(scenarios)) {
+      truth <- scenarios[[scenario_name]]
+      true_mtd <- which.min(abs(truth - target))
+      for (design in names(skeletons)) {
+        for (simulation in seq_len(n_sim)) {
+          trial <- run_crm_trial(
+            truth, skeletons[[design]], target, n_patients,
+            cohort_size, start_dose, run_in_size
+          )
+          index <- index + 1L
+          records[[index]] <- data.frame(
+            run_in_plan = plan_names[plan_index],
+            run_in_size = run_in_size,
+            scenario = scenario_name,
+            design = design,
+            simulation = simulation,
+            selected_dose = trial$selected_dose,
+            true_mtd = true_mtd,
+            dlt_rate = mean(trial$history$dlt),
+            as.list(setNames(
+              trial$allocation,
+              paste0("allocated_d", seq_along(trial$allocation))
+            )),
+            check.names = FALSE
+          )
+        }
+      }
+    }
+  }
+  do.call(rbind, records)
+}
+
+# Summarize the 27 run-in x scenario x skeleton settings. Low-dose allocation
+# is the proportion of patients assigned to dose levels 1 or 2.
+summarize_crm_run_in_plans <- function(results, n_patients) {
+  groups <- split(
+    results,
+    interaction(
+      results$run_in_plan, results$scenario, results$design, drop = TRUE
+    )
+  )
+  answer <- do.call(rbind, lapply(groups, function(x) data.frame(
+    run_in_plan = x$run_in_plan[1L],
+    run_in_size = x$run_in_size[1L],
+    scenario = x$scenario[1L],
+    design = x$design[1L],
+    probability_correct_selection = mean(x$selected_dose == x$true_mtd),
+    mean_dlt_rate = mean(x$dlt_rate),
+    mean_low_dose_allocation = mean(
+      (x$allocated_d1 + x$allocated_d2) / n_patients
+    )
+  )))
+  rownames(answer) <- NULL
+  answer
 }
 
 # Produce trial-level operating summaries for tables and plots.
@@ -417,4 +514,49 @@ plot_selection_probabilities <- function(summary_object, scenario) {
 plot_allocation_proportions <- function(summary_object, scenario) {
   plot_dose_metric(summary_object$allocation, scenario, "proportion",
                    "Mean allocation proportion", scenario)
+}
+
+# Display the 3 x 3 x 3 factorial results compactly. Each panel is one
+# skeleton; rows are truth scenarios and columns are starting-dose run-in plans.
+plot_crm_factorial_heatmaps <- function(
+    factorial_summary, metric, title, zlim = c(0, 1), digits = 2L) {
+  designs <- unique(factorial_summary$design)
+  scenarios <- unique(factorial_summary$scenario)
+  plans <- unique(
+    factorial_summary[order(factorial_summary$run_in_size), "run_in_plan"]
+  )
+  colors <- hcl.colors(20L, palette = "YlOrRd", rev = TRUE)
+  old <- par(
+    mfrow = c(1, length(designs)), mar = c(7, 6, 4, 1),
+    oma = c(0, 0, 2, 0)
+  )
+  on.exit(par(old))
+
+  for (design in designs) {
+    values <- matrix(
+      NA_real_, nrow = length(plans), ncol = length(scenarios),
+      dimnames = list(plans, scenarios)
+    )
+    x <- factorial_summary[factorial_summary$design == design, ]
+    for (i in seq_len(nrow(x))) {
+      values[x$run_in_plan[i], x$scenario[i]] <- x[[metric]][i]
+    }
+
+    image(
+      seq_along(plans), seq_along(scenarios), values,
+      axes = FALSE, xlab = "Starting-dose run-in", ylab = "True scenario",
+      main = design, zlim = zlim, col = colors
+    )
+    axis(1L, at = seq_along(plans), labels = plans, las = 2L, cex.axis = 0.8)
+    axis(2L, at = seq_along(scenarios), labels = scenarios,
+         las = 2L, cex.axis = 0.8)
+    text(
+      rep(seq_along(plans), times = length(scenarios)),
+      rep(seq_along(scenarios), each = length(plans)),
+      labels = formatC(as.vector(values), format = "f", digits = digits),
+      font = 2L
+    )
+    box()
+  }
+  mtext(title, outer = TRUE, line = 0.5, font = 2L)
 }
