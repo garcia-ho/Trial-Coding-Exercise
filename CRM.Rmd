@@ -133,6 +133,14 @@ example_trial <- run_crm_trial(
 
 example_trial$selected_dose
 example_trial$allocation
+
+# With no observed patients, the posterior equals the prior. Integrating the
+# dose-toxicity curve over that prior gives its prior predictive mean.
+example_prior <- crm_posterior_grid(
+  dose = integer(),
+  dlt = integer(),
+  skeleton = example_skeleton
+)
 ```
 
 ```{r crm-trial-plots, fig.height=4.5, fig.cap="Allocation path and final posterior toxicity estimates for one CRM trial."}
@@ -143,7 +151,9 @@ plot_posterior_toxicity(
   example_trial$fit$posterior_toxicity,
   example_truth,
   target,
-  main = "CRM posterior"
+  main = "CRM prior and posterior",
+  comparison = example_prior$posterior_toxicity,
+  comparison_label = "Prior predictive mean"
 )
 par(old_parameters)
 ```
@@ -161,6 +171,18 @@ is
 \widehat\pi_j=E\left[p_j^{\exp(\alpha)}\mid D\right]
 =\int p_j^{\exp(\alpha)}f(\alpha\mid D)d\alpha.
 \]
+
+The **prior predictive mean** is the corresponding expectation before any
+patients are observed:
+
+\[
+\pi_j^{\mathrm{prior}}=E\left[p_j^{\exp(\alpha)}\right]
+=\int p_j^{\exp(\alpha)}f(\alpha)d\alpha.
+\]
+
+It is not generally identical to the skeleton value \(p_j\), because the power
+transformation is nonlinear. The distance from the prior mean to the posterior
+mean shows how much the observed DLT data changed the model's initial belief.
 
 Clinically, if the posterior mean is below the truth, the
 model is underestimating toxicity.Either discrepancy can change which dose appears closest
@@ -250,6 +272,14 @@ bma_weights <- data.frame(
 )
 knitr::kable(bma_weights, digits = 3)
 bma_trial$selected_dose
+
+# Fit an ordinary CRM with skeleton 2 to exactly the same patients and DLT
+# outcomes observed in the BMA-CRM trial.
+simple_crm_on_bma_data <- crm_posterior_grid(
+  dose = bma_trial$history$dose,
+  dlt = bma_trial$history$dlt,
+  skeleton = skeletons[[2L]]
+)
 ```
 
 ```{r bma-plots, fig.height=4.5, fig.cap="BMA-CRM allocation, evolving model weights, and posterior estimates."}
@@ -262,10 +292,20 @@ plot_posterior_toxicity(
   bma_trial$fit$posterior_toxicity,
   example_truth,
   target,
-  main = "BMA posterior"
+  main = "BMA versus simple CRM",
+  estimate_label = "BMA posterior mean",
+  comparison = simple_crm_on_bma_data$posterior_toxicity,
+  comparison_label = "Simple CRM: skeleton 2"
 )
 par(old_parameters)
 ```
+
+The orange curve is not taken from a separate simulated trial. It refits the
+single-skeleton CRM to the BMA trial's exact dose assignments and DLT outcomes.
+Consequently, differences between the orange and blue curves reflect model
+averaging rather than different random patient data. BMA averages estimates
+from all three skeletons using their posterior model probabilities, whereas the
+simple CRM commits fully to skeleton 2.
 
 # Simulation study
 

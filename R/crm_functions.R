@@ -437,18 +437,38 @@ plot_trial_path <- function(trial) {
          col = c("gray25", "firebrick"), pch = 19L, bty = "n")
 }
 
-# Compare estimated and true DLT probabilities.
-plot_posterior_toxicity <- function(estimate, truth, target,
-                                    main = "Posterior toxicity") {
+# Compare estimated and true DLT probabilities, with an optional additional
+# curve such as a prior mean or a posterior estimate from another CRM model.
+plot_posterior_toxicity <- function(
+    estimate, truth, target, main = "Posterior toxicity",
+    estimate_label = "Posterior mean", comparison = NULL,
+    comparison_label = "Comparison") {
   dose <- seq_along(truth)
   plot(dose, truth, type = "b", pch = 19L,
-       ylim = c(0, max(truth, estimate, target)), xlab = "Dose level",
+       ylim = c(0, max(truth, estimate, comparison, target)), xlab = "Dose level",
        ylab = "DLT probability", main = main)
   lines(dose, estimate, type = "b", pch = 1L, col = "navy")
+  if (!is.null(comparison)) {
+    stopifnot(length(comparison) == length(truth))
+    lines(dose, comparison, type = "b", pch = 2L, lty = 3L,
+          col = "darkorange3")
+  }
   abline(h = target, lty = 2L, col = "gray40")
-  legend("topleft", c("Truth", "Posterior mean", "Target"),
-         col = c("black", "navy", "gray40"), pch = c(19L, 1L, NA),
-         lty = c(1L, 1L, 2L), bty = "n")
+  labels <- c("Truth", estimate_label)
+  colors <- c("black", "navy")
+  points <- c(19L, 1L)
+  line_types <- c(1L, 1L)
+  if (!is.null(comparison)) {
+    labels <- c(labels, comparison_label)
+    colors <- c(colors, "darkorange3")
+    points <- c(points, 2L)
+    line_types <- c(line_types, 3L)
+  }
+  legend(
+    "topleft", c(labels, "Target"),
+    col = c(colors, "gray40"), pch = c(points, NA),
+    lty = c(line_types, 2L), bty = "n", cex = 0.85
+  )
 }
 
 # Basic MCMC trace and marginal-posterior diagnostics.
@@ -527,8 +547,8 @@ plot_crm_factorial_heatmaps <- function(
   )
   colors <- hcl.colors(20L, palette = "YlOrRd", rev = TRUE)
   old <- par(
-    mfrow = c(1, length(designs)), mar = c(7, 6, 4, 1),
-    oma = c(0, 0, 2, 0)
+    mfrow = c(1, length(designs)), mar = c(7, 7.5, 4.5, 1),
+    oma = c(0, 0, 2.5, 0)
   )
   on.exit(par(old))
 
@@ -544,19 +564,19 @@ plot_crm_factorial_heatmaps <- function(
 
     image(
       seq_along(plans), seq_along(scenarios), values,
-      axes = FALSE, xlab = "Starting-dose run-in", ylab = "True scenario",
-      main = design, zlim = zlim, col = colors
+      axes = FALSE, xlab = "", ylab = "",
+      main = design, zlim = zlim, col = colors, cex.main = 1.3
     )
-    axis(1L, at = seq_along(plans), labels = plans, las = 2L, cex.axis = 0.8)
+    axis(1L, at = seq_along(plans), labels = plans, las = 2L, cex.axis = 1.05)
     axis(2L, at = seq_along(scenarios), labels = scenarios,
-         las = 2L, cex.axis = 0.8)
+         las = 2L, cex.axis = 1.05)
     text(
       rep(seq_along(plans), times = length(scenarios)),
       rep(seq_along(scenarios), each = length(plans)),
       labels = formatC(as.vector(values), format = "f", digits = digits),
-      font = 2L
+      font = 2L, cex = 1.2
     )
     box()
   }
-  mtext(title, outer = TRUE, line = 0.5, font = 2L)
+  mtext(title, outer = TRUE, line = 0.7, font = 2L, cex = 1.3)
 }
