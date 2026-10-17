@@ -16,3 +16,5 @@ renv/local/
 CRM.html
 CRM_cache/
 CRM_files/
+**/*_cache/
+**/*_files/

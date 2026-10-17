@@ -1,0 +1,572 @@
+---
+title: "Drug-Combination BOIN: Exploration and Exploitation"
+author: "Phase I dose-finding coding exercise"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    code_folding: show
+    theme: readable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  dpi = 110
+)
+source(file.path("R", "drug_combo_boin_functions.R"))
+options(width = 100)
+```
+
+# Purpose and question
+
+This exercise studies a two-drug phase I trial on a $4\times4$ grid of
+combinations $A_jB_k$. The maximum sample size is fixed at 36 patients,
+enrolled in cohorts of 3. The target dose-limiting toxicity (DLT) probability is
+
+$$
+\phi=0.25.
+$$
+
+The experiment compares candidate sets containing up to 2, 3, or 4 adjacent
+combinations whenever the design must escalate or de-escalate. It also includes
+a parallel-exploration strategy that precommits three cohorts to each of two
+adjacent combinations. The scientific question is whether giving the algorithm
+more choices or parallel information improves exploration of the
+two-dimensional grid enough to offset reduced adaptivity and possible exposure
+to poorly understood combinations.
+
+The two-candidate rule is standard combination BOIN. The three- and
+four-candidate and parallel rules are deliberately experimental extensions for
+this coding exercise; they are **not** published BOIN recommendations and would
+need a much larger validation study before protocol use.
+
+## Editable simulation settings
+
+These are the only values that normally need to be changed for a quick rerun.
+
+```{r simulation-settings}
+target <- 0.25
+toxic_threshold <- 0.33
+candidate_sizes <- 2:4
+n_sim <- 500L
+n_patients <- 36L
+cohort_size <- 3L
+simulation_seed <- 20261017L
+
+data.frame(
+  setting = c("Target phi", "Clearly toxic threshold", "Replicates per cell",
+              "Maximum sample size", "Cohort size", "Random seed"),
+  value = c(target, toxic_threshold, n_sim, n_patients, cohort_size,
+            simulation_seed)
+) |>
+  knitr::kable(row.names = FALSE)
+```
+
+# Literature basis and assumptions
+
+Standard combination BOIN makes the partial-order assumption that toxicity is
+nondecreasing in the dose of A while B is held fixed and nondecreasing in B
+while A is held fixed. It does not impose a complete ordering between, for
+example, $A_2B_1$ and $A_1B_2$. It also does not require a parametric
+dose--toxicity model. At each visited combination it uses a cell-specific
+binomial likelihood and a Jeffreys $\text{Beta}(0.5,0.5)$ prior.
+
+This differs from model-based combination designs. For example, Thall et al.
+(2003) used informative prior knowledge about the two single-agent toxicity
+curves and a separate interaction component. Copula and regression approaches
+also build a joint surface from marginal models and an interaction parameter.
+Those approaches can borrow information across cells, but misspecification of
+the joint model can matter.
+
+## Do we need marginal dose--toxicity effects for both drugs?
+
+For **conducting this BOIN exercise, no**. The allocation rule needs outcomes
+at the visited combinations, the target $\phi$, and the partial ordering. It
+does not need prespecified marginal curves.
+
+For **generating simulation truth, yes, some joint toxicity specification is
+unavoidable**. There are two defensible choices:
+
+1. specify two monotherapy curves plus a formal interaction model; or
+2. directly specify the complete joint DLT-probability matrix.
+
+This notebook uses the second approach so that the BOIN candidate-set question
+is not confounded with a fitted interaction model. The first row and first
+column describe each drug while its partner is at the *lowest studied dose*;
+they are not monotherapy curves because neither drug has a zero-dose level in
+this grid. If reliable monotherapy information is available, a later exercise
+could construct scenarios from that information and vary the interaction
+parameter separately.
+
+Relevant published sources include the original combination-BOIN paper and
+software description, the practical review of combination designs, and the
+two-agent model of Thall et al.:
+
+- Lin and Yin (2017), [Bayesian optimal interval design for dose finding in
+  drug-combination trials](https://doi.org/10.1177/0962280215594494).
+- Zhou et al. (2020), [BOIN: An R Package for Designing Single-Agent and
+  Drug-Combination Dose-Finding Trials](https://doi.org/10.18637/jss.v094.i13).
+- Harrington et al. (2013), [Practical designs for phase I combination studies
+  in oncology](https://pmc.ncbi.nlm.nih.gov/articles/PMC4720553/).
+- Thall et al. (2003), [Dose-Finding with Two Agents in Phase I Oncology
+  Trials](https://doi.org/10.1111/1541-0420.00058).
+- Barnett et al. (2024), [A comparison of model-free phase I dose escalation
+  designs for dual-agent combination therapies](https://doi.org/10.1177/09622802231220497).
+
+# Four interaction scenarios
+
+The four matrices below are constructed teaching scenarios informed by the
+interaction patterns studied in the combination-dose-finding literature; they
+are not copied from one publication. All four preserve coordinate-wise
+monotonicity. "Synergy" and "antagonism" here refer to *toxicity interaction*
+relative to a common additive reference surface, not therapeutic efficacy.
+
+1. **Global synergy:** joint toxicity rises faster than the additive reference
+   across most of the grid.
+2. **Global antagonism:** joint toxicity rises more slowly across most of the
+   grid, producing a broad MTD contour.
+3. **Low-dose synergy / high-dose antagonism:** toxicity is relatively
+   amplified at the lower grid and attenuated at the upper grid.
+4. **Low-dose antagonism / high-dose synergy:** the reverse crossover pattern;
+   upper combinations become toxic quickly.
+
+```{r define-scenarios}
+scenarios <- make_combo_scenarios()
+additive_reference <- make_additive_reference()
+
+scenario_table <- do.call(rbind, lapply(names(scenarios), function(name) {
+  truth <- scenarios[[name]]
+  mtd <- true_combo_mtds(truth, target)
+  data.frame(
+    scenario = name,
+    minimum_DLT = min(truth),
+    maximum_DLT = max(truth),
+    true_MTD_combinations = paste(
+      paste0("A", mtd[, 1L], "B", mtd[, 2L]), collapse = ", "
+    ),
+    true_MTD_probabilities = paste(
+      formatC(truth[mtd], format = "f", digits = 2L), collapse = ", "
+    )
+  )
+}))
+knitr::kable(scenario_table, digits = 2, row.names = FALSE)
+```
+
+In each plot:
+
+- One line represents a fixed dose of Drug A while Drug B increases.
+- The solid horizontal line is the 25% target.
+- The dashed red line is the clearly-toxic threshold of 33%.
+- Large open circles identify the true MTD combination(s), defined as the cells
+  closest to the 25% target.
+
+```{r true-surfaces, fig.width=11, fig.height=9}
+old_par <- par(mfrow = c(2, 2), mar = c(4, 4, 3, 1))
+for (name in names(scenarios)) {
+  plot_combo_scenario_lines(
+    probability = scenarios[[name]],
+    target = target,
+    toxic_threshold = toxic_threshold,
+    main = name
+  )
+}
+par(old_par)
+```
+
+# BOIN decision rule
+
+The usual BOIN defaults are $\phi_1=0.6\phi=0.15$ for an under-toxic dose and
+$\phi_2=1.4\phi=0.35$ for an over-toxic dose. The optimal boundaries are
+
+$$
+\lambda_e=
+\frac{\log\{(1-\phi_1)/(1-\phi)\}}
+{\log\{\phi(1-\phi_1)/[\phi_1(1-\phi)]\}},
+\qquad
+\lambda_d=
+\frac{\log\{(1-\phi)/(1-\phi_2)\}}
+{\log\{\phi_2(1-\phi)/[\phi(1-\phi_2)]\}}.
+$$
+
+```{r boundaries}
+boundaries <- boin_boundaries(target)
+data.frame(
+  target = target,
+  phi1 = 0.6 * target,
+  phi2 = 1.4 * target,
+  lambda_e = unname(boundaries["escalate"]),
+  lambda_d = unname(boundaries["deescalate"])
+) |>
+  knitr::kable(digits = 4, row.names = FALSE)
+```
+
+At the current combination $A_jB_k$, let $y_{jk}$ be the cumulative DLT count,
+$n_{jk}$ the cumulative number treated, and
+$\widehat p_{jk}=y_{jk}/n_{jk}$.
+
+- Escalate if $\widehat p_{jk}\leq\lambda_e$.
+- De-escalate if $\widehat p_{jk}\geq\lambda_d$.
+- Otherwise remain at the current combination.
+
+If there is more than one candidate, the next combination maximizes
+
+$$
+\Pr\{\lambda_e<p_{jk}<\lambda_d\mid y_{jk},n_{jk}\},
+$$
+
+where
+$p_{jk}\mid y_{jk},n_{jk}\sim\text{Beta}(y_{jk}+0.5,
+n_{jk}-y_{jk}+0.5)$. Exact ties are broken randomly.
+
+The safety rule eliminates a combination, and every coordinate-wise higher
+combination, if
+
+$$
+\Pr(p_{jk}>\phi\mid y_{jk},n_{jk})>0.95.
+$$
+
+Elimination of $A_1B_1$ stops the trial. Thus 36 is the common maximum sample
+size; a safety stop is the only reason the realized sample size can be lower.
+
+# Candidate-set experiment
+
+Published combination BOIN uses the following plain-text notation here so it
+renders reliably in HTML:
+
+- Escalation set `AE`: `{A(j+1)Bk, AjB(k+1)}`.
+- De-escalation set `AD`: `{A(j-1)Bk, AjB(k-1)}`.
+- The BOIN sources use `AD`, not `AC`. This notebook treats the requested `AC`
+  as the de-escalation set `AD`.
+
+The experimental candidate sets are:
+
+- **Size 2:** the two one-level axial neighbors (standard BOIN).
+- **Size 3:** add the diagonal that increases both drugs.
+- **Size 4:** add an anti-diagonal combination whose ordering is unknown.
+
+For example, from `A2B2`, the size-4 escalation set is exactly:
+
+- `A3B2`
+- `A3B3`
+- `A2B3`
+- `A1B3`
+
+The fourth cell raises B but lowers A. Therefore, partial monotonicity does not
+tell us whether it is more or less toxic than `A2B2`; that uncertainty is the
+reason to explore it. De-escalation uses the reflected set. Invalid edge cells
+and eliminated cells are removed.
+
+Size 3 and size 4 remain experimental rules. Their safety must be assessed
+alongside PCS.
+
+```{r candidate-set-example}
+set.seed(27)
+empty_n <- matrix(0L, 4L, 4L)
+empty_elimination <- matrix(FALSE, 4L, 4L)
+candidate_example <- do.call(rbind, lapply(candidate_sizes, function(size) {
+  escalation <- combo_candidate_set(
+    c(2L, 2L), 4L, 4L, "escalate", empty_elimination, size, empty_n
+  )
+  deescalation <- combo_candidate_set(
+    c(3L, 3L), 4L, 4L, "deescalate", empty_elimination, size, empty_n
+  )
+  data.frame(
+    candidate_size = size,
+    escalation_set = paste0("A", escalation[, 1L], "B", escalation[, 2L],
+                            collapse = ", "),
+    deescalation_set = paste0("A", deescalation[, 1L], "B", deescalation[, 2L],
+                              collapse = ", ")
+  )
+}))
+knitr::kable(candidate_example, row.names = FALSE)
+```
+
+## Parallel exploration comparator
+
+Your main point is correct: Lin and Yin published a **parallel crossing BOIN
+(PC-BOIN)** method for finding several points on an MTD contour. However, the
+published method is not simply a local split of six cohorts between the two
+members of `AE`.
+
+- Published PC-BOIN first creates parallel one-dimensional subtrials by fixing
+  one drug, then uses a crossing stage to move between subtrials.
+- The local comparator in this notebook is an extension of size 2: whenever
+  both standard neighbors exist and 18 places remain, it sends three cohorts
+  to each neighbor—9 patients per neighbor and 18 total.
+- The six cohorts are precommitted. The design reviews both neighbors after the
+  block, applies safety elimination, chooses the better acceptable neighbor,
+  and resumes size-2 BOIN.
+- The rule can launch another block whenever enough patients remain. With a
+  maximum of 36, no more than one complete 18-patient block can fit after the
+  initial cohort.
+
+I call this arm **local parallel 3+3** rather than PC-BOIN, because equating it
+with Lin and Yin's two-stage subtrial design would be misleading. See
+[Lin and Yin (2017)](https://doi.org/10.1177/0962280215594494) and the
+[BOIN overview](https://pmc.ncbi.nlm.nih.gov/articles/PMC9260438/).
+
+# One simulated trial under each candidate-set rule
+
+These paths use the global-synergy truth:
+
+- The number beside a point is the cohort number.
+- Orange points indicate at least one DLT in that cohort.
+- The blue X is the final selected combination.
+- Repeated labels mean the design returned to or stayed at a combination.
+
+```{r example-paths, fig.width=11, fig.height=9}
+example_trials <- lapply(candidate_sizes, function(size) {
+  run_combo_boin_trial(
+    scenarios[["Global synergy"]],
+    target = target,
+    n_patients = n_patients,
+    cohort_size = cohort_size,
+    candidate_size = size,
+    seed = 800 + size
+  )
+})
+example_trials[[4L]] <- run_parallel_combo_boin_trial(
+  scenarios[["Global synergy"]],
+  target = target,
+  n_patients = n_patients,
+  cohort_size = cohort_size,
+  parallel_cohorts_per_combo = 3L,
+  seed = 804
+)
+old_par <- par(mfrow = c(2, 2), mar = c(4.5, 4.5, 3.5, 1))
+for (i in seq_along(example_trials)) {
+  plot_combo_trial_path(
+    example_trials[[i]],
+    main = example_trials[[i]]$design
+  )
+}
+par(old_par)
+```
+
+# Performance metrics and formulas
+
+Let $R$ be the number of simulated trials; $N_r$ the realized number treated
+in trial $r$; $\widehat d_r$ the selected combination; $p(d)$ the true DLT
+probability of combination $d$; and $n_r(d)$ the number assigned to it. Let
+$M$ be the set of true MTDs (cells closest to $\phi$),
+$T=\{d:p(d)>0.33\}$ the clearly toxic set, and
+$O=\{d:p(d)>\phi\}$ the operational above-target set.
+
+## Accuracy
+
+The probability of correct selection is
+
+$$
+\text{PCS}=\frac{1}{R}\sum_{r=1}^R I(\widehat d_r\in M).
+$$
+
+When several combinations are equally close to 0.25, selecting any of them is
+correct.
+
+## Safety
+
+**B1: toxic selection**
+
+$$
+B1=\frac{1}{R}\sum_{r=1}^R I\{p(\widehat d_r)>0.33\}.
+$$
+
+**B2: allocation to clearly toxic combinations**
+
+$$
+B2=\frac{1}{R}\sum_{r=1}^R
+\frac{\sum_{d\in T}n_r(d)}{N_r}.
+$$
+
+The strict threshold $>0.33$ is used exactly as requested. A cell with true
+DLT probability 0.33 would not count as clearly toxic.
+
+## Reliability
+
+Because a two-dimensional grid is only partially ordered, “above MTD” is made
+operational rather than geometric: it means true DLT probability greater than
+$\phi=0.25$.
+
+**C1: trial-level overdose risk**
+
+$$
+C1=\frac{1}{R}\sum_{r=1}^R
+I\left\{\frac{\sum_{d\in O}n_r(d)}{N_r}>0.50\right\}.
+$$
+
+**C2: poor allocation**
+
+$$
+C2=\frac{1}{R}\sum_{r=1}^R
+I\left\{\sum_{d\in M}n_r(d)<6\right\}.
+$$
+
+**C3: irrational assignment** is event-based. A decision is a qualifying
+opportunity after at least 2 DLTs among the first 3 patients at a cell, or after
+at least 6 patients when the cumulative observed DLT rate is greater than 1/2.
+Then
+
+$$
+C3=\frac{\text{number of qualifying decisions not followed by a strict
+coordinate-wise de-escalation or safety stop}}
+{\text{number of qualifying decisions}}.
+$$
+
+A safety stop is not counted as irrational because it is more conservative
+than de-escalation. The report also prints the C3 denominator; a rate based on
+very few qualifying events should not be over-interpreted. In the parallel
+strategy, the C3 assessment occurs at the end of the precommitted block, which
+is the first time an adaptive response is permitted; this makes delayed
+adaptation part of the reliability comparison.
+
+# Simulation experiment
+
+The full factorial experiment contains 4 interaction scenarios and 4 design
+strategies: candidate sets of size 2, 3, and 4, plus parallel exploration. Each
+cell uses the same maximum sample size and cohort size. The default of
+`r n_sim` replicates per cell is suitable for an exercise;
+protocol-calibration work would normally use several thousand or more and
+report Monte Carlo uncertainty.
+
+```{r run-simulation, cache=TRUE, cache.extra=list(n_sim, n_patients, cohort_size, simulation_seed)}
+simulation_results <- simulate_combo_boin_scenarios(
+  scenarios = scenarios,
+  candidate_sizes = candidate_sizes,
+  include_parallel = TRUE,
+  parallel_cohorts_per_combo = 3L,
+  target = target,
+  toxic_threshold = toxic_threshold,
+  n_sim = n_sim,
+  n_patients = n_patients,
+  cohort_size = cohort_size,
+  seed = simulation_seed
+)
+operating_summary <- summarize_combo_boin(simulation_results)
+```
+
+```{r result-table}
+display_summary <- operating_summary[c(
+  "scenario", "design", "PCS", "B1_toxic_selection",
+  "B2_toxic_allocation", "C1_overdose_risk", "C2_poor_allocation",
+  "C3_irrational_assignment", "C3_opportunities", "mean_MTD_allocation",
+  "mean_DLT_rate"
+)]
+probability_columns <- c(
+  "PCS", "B1_toxic_selection", "B2_toxic_allocation",
+  "C1_overdose_risk", "C2_poor_allocation",
+  "C3_irrational_assignment", "mean_MTD_allocation", "mean_DLT_rate"
+)
+display_summary[probability_columns] <- lapply(
+  display_summary[probability_columns],
+  function(x) ifelse(is.na(x), NA_character_, sprintf("%.1f%%", 100 * x))
+)
+names(display_summary) <- c(
+  "Scenario", "Design", "PCS", "B1", "B2", "C1", "C2", "C3",
+  "C3 events", "MTD allocation", "DLT rate"
+)
+knitr::kable(display_summary, row.names = FALSE, align = "llrrrrrrrrr")
+```
+
+# Visual comparison of operating characteristics
+
+Read these panels as follows:
+
+- High PCS is better.
+- Low B1, B2, C1, C2, and C3 is better.
+- Color and point shape both identify the true toxicity scenario.
+- Each panel uses a range suited to that metric so small differences remain
+  visible. The table above contains the exact values.
+
+```{r metric-dot-plots, fig.width=12, fig.height=13}
+plot_combo_operating_dots(operating_summary)
+```
+
+For a quick comparison, the next table identifies which strategy has the
+largest estimated PCS and which has the lowest clearly-toxic allocation in each
+scenario. Monte Carlo differences that are only a few percentage points may be
+noise at this number of replicates.
+
+```{r best-rule-table}
+comparison <- do.call(rbind, lapply(split(
+  operating_summary, operating_summary$scenario
+), function(x) {
+  data.frame(
+    scenario = x$scenario[1L],
+    highest_PCS_design = x$design[which.max(x$PCS)],
+    highest_PCS = max(x$PCS),
+    lowest_B2_design = x$design[which.min(x$B2_toxic_allocation)],
+    lowest_B2 = min(x$B2_toxic_allocation)
+  )
+}))
+rownames(comparison) <- NULL
+knitr::kable(comparison, digits = 3, row.names = FALSE)
+```
+
+# Where the design selects
+
+Each bubble shows a selection probability. Larger bubbles mean more frequent
+selection, and the value is printed in the bubble. Orange boxes mark true MTDs.
+
+- A diffuse pattern means the design has difficulty learning the MTD contour.
+- Frequent selection above the true MTD contour is a safety warning.
+- Cells below 0.5% are left blank to reduce visual clutter.
+
+```{r selection-bubbles, fig.width=12, fig.height=10}
+for (name in names(scenarios)) {
+  plot_combo_selection_bubbles(
+    simulation_results, scenarios, target, scenario_name = name
+  )
+}
+```
+
+# Where patients are treated
+
+Selection and allocation answer different clinical questions:
+
+- Selection describes the final recommendation.
+- Allocation describes where trial participants were actually treated.
+- A correct final choice does not rule out substantial toxic exposure during
+  escalation.
+- Cells below 0.5% are left blank to reduce visual clutter.
+
+```{r allocation-bubbles, fig.width=12, fig.height=10}
+for (name in names(scenarios)) {
+  plot_combo_allocation_bubbles(
+    simulation_results, scenarios, scenario_name = name
+  )
+}
+```
+
+# Interpretation
+
+- **Size 2** is the standard local rule. It changes only one drug at a time.
+- **Size 3** also examines the combination that raises both drugs.
+- **Size 4** adds an anti-diagonal option. This explores an unknown ordering,
+  but it can also move patients into an unexpected toxic region.
+- **Local parallel 3+3** learns more about both standard neighbors, but commits
+  18 patients before reacting to the block outcomes.
+- PCS should never be read alone. B1/B2 describe safety, while C1/C2 show
+  whether the design treated enough patients near the true MTD.
+- C3 should be close to zero because 2/3 or more than 3/6 DLTs normally forces
+  de-escalation. Always check its event count as well as its percentage.
+- These results are an exercise, not evidence that an experimental rule should
+  replace standard BOIN. A protocol study needs more scenarios and many more
+  simulation replicates.
+
+# Implementation notes and limitations
+
+- Only base R plus `knitr` and `rmarkdown` is used.
+- Cell-specific posterior means are used for the transparent final selection
+  in this exercise. Production BOIN software may use two-dimensional isotonic
+  estimates for final MTD selection, so numerical results need not match the
+  validated BOIN package.
+- Interaction labels describe the *true simulated toxicity matrices*; BOIN
+  does not estimate a synergy parameter.
+- Local parallel 3+3 is not a full implementation of published PC-BOIN.
+- The design is for education only and is not validated for trial conduct.
