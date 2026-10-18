@@ -1,5 +1,6 @@
 .Rhistory
 .RData
+.Rdata
 .Ruserdata
 .Renviron
 .Rproj.user/
@@ -11,6 +12,10 @@ renv/staging/
 renv/python/
 renv/local/
 .bootstrap-library/
+
+# Generated simulation data (rebuilt from the R Markdown source)
+Drug_combo_Boin/data/*.RData
+Drug_combo_Boin/data/*.Rdata
 
 # Rendered output can always be rebuilt from the R Markdown source
 CRM.html
