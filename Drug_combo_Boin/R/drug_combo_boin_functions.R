@@ -227,6 +227,28 @@ combo_candidate_set <- function(current, n_a, n_b, direction, eliminated,
   unname(candidates[allowed, , drop = FALSE])
 }
 
+# Return only the two axial neighbors used by local parallel 1+1. This helper
+# deliberately excludes diagonal and anti-diagonal moves:
+#   escalate from AjBk -> A(j+1)Bk and AjB(k+1)
+#   de-escalate from AjBk -> A(j-1)Bk and AjB(k-1)
+# Edge cells and combinations already eliminated by the safety rule are removed.
+local_parallel_candidate_set <- function(current, n_a, n_b, direction,
+                                         eliminated) {
+  stopifnot(direction %in% c("escalate", "deescalate"))
+  offsets <- if (direction == "escalate") {
+    rbind(c(1L, 0L), c(0L, 1L))
+  } else {
+    rbind(c(-1L, 0L), c(0L, -1L))
+  }
+  candidates <- sweep(offsets, 2L, current, "+")
+  valid <- candidates[, 1L] >= 1L & candidates[, 1L] <= n_a &
+    candidates[, 2L] >= 1L & candidates[, 2L] <= n_b
+  candidates <- candidates[valid, , drop = FALSE]
+  if (!nrow(candidates)) return(matrix(integer(), ncol = 2L))
+  allowed <- !eliminated[candidates]
+  unname(candidates[allowed, , drop = FALSE])
+}
+
 # Choose the admissible combination with the largest posterior probability of
 # lying in the BOIN stay interval. Random selection resolves exact ties.
 choose_combo_candidate <- function(candidates, y, n, boundaries, target) {
@@ -463,8 +485,8 @@ run_parallel_combo_boin_trial <- function(
     next_combo <- current
     candidates <- matrix(integer(), ncol = 2L)
     if (action %in% c("escalate", "deescalate")) {
-      candidates <- combo_candidate_set(
-        current, n_a, n_b, action, eliminated, 2L, n
+      candidates <- local_parallel_candidate_set(
+        current, n_a, n_b, action, eliminated
       )
     }
     candidate_label <- if (nrow(candidates)) {
@@ -523,6 +545,14 @@ run_parallel_combo_boin_trial <- function(
       next_b = if (launch_parallel) NA_integer_ else next_combo[2L],
       c3_opportunity = c3_opportunity,
       c3_failure = c3_failure,
+      parallel_block = if (launch_parallel) {
+        parallel_blocks + 1L
+      } else {
+        NA_integer_
+      },
+      parallel_role = if (launch_parallel) "launch" else "sequential",
+      parallel_parent_a = if (launch_parallel) current[1L] else NA_integer_,
+      parallel_parent_b = if (launch_parallel) current[2L] else NA_integer_,
       stringsAsFactors = FALSE
     )
     patient <- patient + cohort_n
@@ -560,6 +590,10 @@ run_parallel_combo_boin_trial <- function(
             candidates = candidate_label,
             next_a = NA_integer_, next_b = NA_integer_,
             c3_opportunity = FALSE, c3_failure = FALSE,
+            parallel_block = parallel_blocks,
+            parallel_role = paste0("branch ", candidate_index),
+            parallel_parent_a = launch_combo[1L],
+            parallel_parent_b = launch_combo[2L],
             stringsAsFactors = FALSE
           )
           last_row_for_candidate[candidate_index] <- cohort
@@ -731,7 +765,15 @@ simulate_combo_boin_scenarios <- function(
     true_mtds <- true_combo_mtds(truth, target)
     allocation_names <- allocation_column_names(nrow(truth), ncol(truth))
     design_spec <- design_specs[[design_index]]
-    set.seed(as.integer(seed + 100003L * task_index))
+    # A stable scenario-design seed lets one method be rerun without changing
+    # the random streams for the methods retained from a previous simulation.
+    design_seed_index <- if (identical(design_spec, "parallel")) {
+      4L
+    } else {
+      match(as.integer(design_spec), 2:4)
+    }
+    cell_seed_index <- (scenario_index - 1L) * 4L + design_seed_index
+    set.seed(as.integer(seed + 100003L * cell_seed_index))
     records <- vector("list", n_sim)
 
     for (simulation in seq_len(n_sim)) {
@@ -1349,7 +1391,41 @@ plot_combo_trial_path <- function(trial, main = NULL) {
   points(true_mtds[, 2L], true_mtds[, 1L], pch = 21L, cex = 3.5,
          bg = "#E2F7EF", col = "#65B891", lwd = 2.4)
 
-  lines(plot_b, plot_a, lwd = 1.8, col = "#64748B")
+  has_parallel_branches <- all(c(
+    "parallel_block", "parallel_role",
+    "parallel_parent_a", "parallel_parent_b"
+  ) %in% names(h)) && any(grepl("^branch ", h$parallel_role))
+
+  if (!has_parallel_branches) {
+    lines(plot_b, plot_a, lwd = 1.8, col = "#64748B")
+  } else {
+    # The solid line follows the adaptive current path. Concurrent branch
+    # cohorts are excluded so two sibling candidates are never drawn as a
+    # sequential move from one to the other.
+    path_rows <- which(!grepl("^branch ", h$parallel_role))
+    if (length(path_rows) >= 2L) {
+      lines(plot_b[path_rows], plot_a[path_rows],
+            lwd = 1.8, col = "#64748B")
+    }
+
+    # Each parallel candidate receives its own dashed spoke from the common
+    # launch combination. For example, escalation at A2B2 draws A2B2--A3B2
+    # and A2B2--A2B3, never A3B2--A2B3.
+    branch_rows <- which(grepl("^branch ", h$parallel_role))
+    for (branch_row in branch_rows) {
+      parent_row <- which(
+        h$parallel_block == h$parallel_block[branch_row] &
+          h$parallel_role == "launch"
+      )[1L]
+      if (!is.na(parent_row)) {
+        segments(
+          plot_b[parent_row], plot_a[parent_row],
+          plot_b[branch_row], plot_a[branch_row],
+          col = "#7C9CB8", lwd = 2.2, lty = 2L
+        )
+      }
+    }
+  }
   points(
     plot_b, plot_a, pch = 21L, cex = 2.0,
     bg = ifelse(h$cohort_dlt > 0, "#FDBA74", "#BAE6FD"),

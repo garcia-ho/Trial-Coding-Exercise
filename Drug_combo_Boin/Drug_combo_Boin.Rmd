@@ -342,9 +342,11 @@ knitr::kable(candidate_example, row.names = FALSE)
 
 ## Local parallel comparator
 
-Consider an escalation decision from `A2B2`:
+At `A2B2`, local parallel 1+1 uses only one-level axial neighbors:
 
-- The two standard candidates are `A3B2` and `A2B3`.
+- Escalation candidates are `A3B2` and `A2B3`.
+- De-escalation candidates are `A1B2` and `A2B1`.
+- Diagonal and anti-diagonal combinations are never used by local parallel 1+1.
 - Ordinary size-2 BOIN sends the next cohort to only one candidate.
 - **Local parallel 1+1** sends one cohort to each candidate: 3 patients at
   `A3B2` and 3 at `A2B3`, for 6 new patients in total.
@@ -373,6 +375,9 @@ These paths use the global-synergy truth:
 - The blue X is the final selected combination.
 - The blue X now uses the order-constrained isotonic posterior estimate.
 - Repeated visits are slightly offset so their cohort numbers remain visible.
+- In the local-parallel panel, two dashed lines leave the same launch
+  combination. They are concurrent branch cohorts, not a sequential move from
+  the first candidate to the second. The solid line follows the adaptive path.
 
 Why the earlier size-3 path showed an implausibly low selected combination:
 
