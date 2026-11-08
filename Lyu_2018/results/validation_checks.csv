@@ -1,0 +1,22 @@
+"check","passed"
+"All 45 independently transcribed Table 2 dose assignments match",TRUE
+"All 30 continuation decisions are Go; all 15 final decisions are Exit",TRUE
+"Every cycle ends at the Table 2 calendar week",TRUE
+"The replay ends at week 56 with all 45 outcomes observed",TRUE
+"All nine final toxicity numerators and denominators match",TRUE
+"The sole printed-total discrepancy is week 40, C3 D2: 1/6 versus 1/3",TRUE
+"mTPI-2 gives E at 0/3, S at 1/3, D at 3/6",TRUE
+"Appendix versus Figure 2 differs only at 2 DLTs / 2 patients",TRUE
+"The explicit minimum-n=3 convention matches all 135 cells of both Figure 2 panels",TRUE
+"The Figure 2 convention also reproduces all 45 Table 2 doses",TRUE
+"No future outcomes leak into decisions made by week 16",TRUE
+"Three DLTs at the lowest dose stop the trial at week 8",TRUE
+"No-DLT replay respects dose boundaries and the first-cohort default",TRUE
+"Unsafe D2 in C1 excludes D2-D3 in all later cycles",TRUE
+"Exclusion remains permanent after later posterior risk decreases",TRUE
+"DCR checks the lowest NEXT-cycle cell",TRUE
+"Equal-weight PAVA pools an order violation",TRUE
+"Weighted PAVA uses the block's total weight",TRUE
+"PAVA rechecks larger blocks after a merge",TRUE
+"MTS considers 2! x 3! = 12 possible intensity-respecting orders",TRUE
+"Explicit within-order tie conventions expose different MTS outputs",TRUE
