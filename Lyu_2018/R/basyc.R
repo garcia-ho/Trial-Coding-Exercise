@@ -87,19 +87,27 @@ dar2 <- function(current_dose, current_tox, cycle, previous_doses,
        previous = paste(details, collapse = "; "))
 }
 
-# Replay a fixed matrix of observed outcomes. Doses are COMPUTED, never read
-# from the expected-dose fixture. This is a deterministic Table 2 replay,
-# not a Monte Carlo simulation or a model for generating patient toxicity.
+# Replay binary outcomes, or simulate outcomes from pre-generated uniforms.
+# With toxicity_prob supplied, outcomes[i,j] is U(0,1) and the observed DLT
+# is I(U < p[d,j]) at the dose ACTUALLY assigned. Future outcomes stay hidden.
 run_basyc <- function(outcomes, cohort_size = 3L, cycle_weeks = 8L,
-                      settings = basyc_settings(), decision_fun = mtpi2_decision) {
+                      settings = basyc_settings(), decision_fun = mtpi2_decision,
+                      toxicity_prob = NULL) {
   outcomes <- as.matrix(outcomes)
   stopifnot(nrow(outcomes) > 0, ncol(outcomes) > 0,
             cohort_size >= 1, cohort_size %% 1 == 0,
-            nrow(outcomes) %% cohort_size == 0, cycle_weeks > 0,
-            all(outcomes %in% c(0, 1)))
+            nrow(outcomes) %% cohort_size == 0, cycle_weeks > 0)
   n_patient <- nrow(outcomes)
   n_cycle <- ncol(outcomes)
   n_cohort <- n_patient / cohort_size
+  if (is.null(toxicity_prob)) {
+    stopifnot(all(outcomes %in% c(0, 1)))
+  } else {
+    stopifnot(is.matrix(toxicity_prob),
+              identical(dim(toxicity_prob), c(as.integer(settings$n_dose), n_cycle)),
+              all(is.finite(toxicity_prob)), all(toxicity_prob >= 0 & toxicity_prob <= 1),
+              all(is.finite(outcomes)), all(outcomes >= 0 & outcomes < 1))
+  }
   cohort <- rep(seq_len(n_cohort), each = cohort_size)
   assignments <- data.frame(week = numeric(), patient = integer(), cohort = integer(),
                             cycle = integer(), dose = integer(), end_week = numeric(),
@@ -122,6 +130,9 @@ run_basyc <- function(outcomes, cohort_size = 3L, cycle_weeks = 8L,
     if (nrow(due)) {
       new <- due[, c("patient", "cohort", "cycle", "dose", "end_week")]
       new$tox <- outcomes[cbind(new$patient, new$cycle)]
+      if (!is.null(toxicity_prob)) {
+        new$tox <- as.integer(new$tox < toxicity_prob[cbind(new$dose, new$cycle)])
+      }
       observed <- rbind(observed, new)
       counts <- dose_cycle_counts(observed, settings$n_dose, n_cycle)
       safety <- update_safety(counts, excluded, settings)
@@ -149,7 +160,8 @@ run_basyc <- function(outcomes, cohort_size = 3L, cycle_weeks = 8L,
           # Under equal eight-week cycles, the previous cohort finishes
           # the destination cycle at this epoch before decisions are made.
           if (!nrow(prev)) stop("Previous cohort has not completed the next cycle.")
-          z <- dar2(row$dose, outcomes[row$patient, j], j, prev$dose,
+          current_tox <- new$tox[new$patient == row$patient & new$cycle == j]
+          z <- dar2(row$dose, current_tox, j, prev$dose,
                     counts, excluded, settings, decision_fun)
         }
         if (is.na(z$dose)) stop("No available next-cycle dose after safety checks.")

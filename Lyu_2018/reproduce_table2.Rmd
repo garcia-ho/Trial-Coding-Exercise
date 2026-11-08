@@ -197,17 +197,6 @@ data.frame(Patients = fit$n_patient, Observed_patient_cycles = nrow(fit$observed
            End_week = fit$end_week, Stopped_early = fit$stopped)
 ```
 
-## Compare all computed doses with the publication
-
-Only now read the separate expected-dose fixture. Every assigned dose was
-already calculated above.
-
-```{r dose-comparison}
-dose_check <- compare_table2_doses(fit)
-stopifnot(nrow(dose_check) == 45, all(dose_check$match))
-knitr::kable(dose_check, caption = "45 computed doses versus the independent Table 2 transcription")
-```
-
 ## Inspect the split at week 16
 
 The cycle-1 D2 data are 1/3, giving candidate D2; the destination cycle-2
@@ -259,61 +248,6 @@ for (week in seq(8, 56, by = 8)) {
 At week 48, patients 13-15 have finished cycle 2 and are assigned cycle-3
 doses D1, D2, D2. At week 56 their outcomes are X, X, O, respectively.
 This changes cycle-3 D1 from 1/6 to 2/7 and D2 from 2/6 to 3/8.
-
-# Publication discrepancies, kept visible
-
-## Table 2's week-40 denominator
-
-```{r printed-count-check}
-total_check <- compare_table2_totals(fit)
-data.frame(Count_cells = nrow(total_check), Matching = sum(total_check$match),
-           Discrepancies = sum(!total_check$match))
-knitr::kable(subset(total_check, !match))
-```
-
-At week 40, only patients 7-9 have completed cycle 3 at D2, with one DLT.
-Patients 10-12 are **assigned** D2 at that visit; their cycle-3 outcomes
-arrive at week 48. Consequently, 1/3 is the patient-level total at week 40.
-The printed 1/6 apparently counts patients who have not yet completed that
-cycle. We retain the printed value in the reference CSV but do not use it
-to corrupt the observed-data counts. This difference does not change the
-Table 2 allocations, because DAR-2's minimum still yields D2.
-
-## Figure 2 versus the unqualified appendix safety rule
-
-The appendix says to exclude when $\Pr(p>0.30\mid x,n)>0.95$ without a
-minimum $n$. For $(x,n)=(2,2)$:
-
-$$
-p\mid D\sim\operatorname{Beta}(3,1),
-\qquad \Pr(p>0.30\mid D)=1-0.30^3=0.973.
-$$
-
-Thus the appendix gives NG/DU. Figure 2 instead shows G/D. Requiring at
-least three patients for the safety override reproduces the printed
-figure, but that requirement is not explicitly in the appendix.
-
-```{r figure2-check}
-reference <- figure2_reference()
-appendix_table <- decision_tables(settings = settings)
-figure_settings <- basyc_settings(safety_min_n = 3)
-figure_table <- decision_tables(settings = figure_settings)
-different <- reference$DAR != appendix_table$DAR |
-             reference$DCR != appendix_table$DCR
-knitr::kable(data.frame(reference[different, ],
-                        Appendix_DAR = appendix_table$DAR[different],
-                        Appendix_DCR = appendix_table$DCR[different]))
-stopifnot(all(reference$DAR == figure_table$DAR),
-          all(reference$DCR == figure_table$DCR))
-
-# Both conventions give the same 45 doses in Table 2.
-figure_fit <- run_basyc(outcomes, settings = figure_settings)
-stopifnot(all(compare_table2_doses(figure_fit)$match))
-```
-
-```{r figure2, fig.width=12, fig.height=6, fig.cap='Printed-Figure-2 convention: minimum n=3 for the safety override. All 135 cells in each panel match the independent transcription.'}
-plot_decision_tables(figure_table)
-```
 
 # Final MTS: an explicit implementation of Appendix p. 18
 
@@ -379,49 +313,405 @@ nonincreasing sequence receives a vote, the implementation returns no MTS
 instead of silently introducing another fallback rule. Enumeration stops
 with an informative error if it would exceed `max_orders`.
 
-# Checks, reuse and saved results
 
-The validation includes independent Table 2 and Figure 2 transcriptions,
-absence of future-outcome leakage, early stopping, permanent upper-dose /
-later-cycle exclusion, dose boundaries, the first-cohort default and PAVA
-pooling. It writes detailed audit CSVs to `results/`.
+# Table 3: parallel simulation and comparison with the paper
 
-```{r validation}
-# The script prints a console summary; show the same results once as a table.
-invisible(capture.output(source(lyu_path("validate.R"), echo = FALSE)))
-knitr::kable(checks, caption = "Executable validation checks")
+## Functions and the one-file workflow
+
+The Table 2 reproduction above stays unchanged. Table 3 scenarios 1-6 use the same
+allocation and final-recommendation functions:
+
+| Function | Called for |
+|:--|:--|
+| `simulate_table3()` in `simulate.R` | Repeating scenarios 1-6 in parallel batches |
+| `run_basyc()` in `R/basyc.R` | Trial allocation, continuation and safety |
+| `select_mts()` in `R/mts.R` | PAVA and final MTS selection in each trial |
+| `summarize_table3()` in `simulate.R` | Summarizing the saved simulation data |
+| `table3_reference()` in `simulate.R` | The transcribed published comparison values |
+
+In a **local Mac terminal**, from the shared project folder, run:
+
+```sh
+bash unity.sh 10000 auto 2018
 ```
 
-To replay another outcome matrix with the same regular enrollment calendar,
-replace `outcomes` and run `run_basyc()` again. The input has one row per
-patient and one column per cycle; the number of patients must be a multiple
-of the cohort size. A replacement mTPI-2 module can be supplied through
-`decision_fun`, with signature `function(x, n, settings)` returning E/S/D/DU.
-BaSyc's separate DCR and trial-wide safety rules remain active.
+This uploads changed code, requests up to 32 currently available Slurm CPU
+cores, and runs 10,000 trials **per scenario for scenarios 1-6** (60,000 total), downloads **`data/table3.rds`**, and renders **this same Rmd**.
+The shell script requests a compute node, not computation on the login node.
+Password/Duo entry is private and manual. Keep the terminal open until the
+command finishes; do not upload new code while that job is running.
 
-This replay assumes equal cycle durations, no additional dropout or recovery
-delays, and one new cohort each cycle while accrual is open. A general
-calendar with delayed outcomes would need an explicit waiting-event
-implementation. Changing outcomes in the input is a programming exercise;
-an operating-characteristic simulation additionally needs a specified
-toxicity-generating model under adaptively assigned doses.
+The simulation call performed on Unity is:
 
-```{r session-info}
-sessionInfo()
+```{r table3-reproduction-call, eval=FALSE}
+source("Lyu_2018/simulate.R")
+result <- simulate_table3(nsim = 10000, cores = 32, seed = 2018, scenarios = 1:6)
+saveRDS(result, "Lyu_2018/data/table3.rds")
 ```
 
-# References
+The function uses `parallel::mclapply()` over batches of trials from scenarios 1-6. Every trial has its
+own seed, so changing the number of workers does not change the simulated
+trials. Workers never exceed `SLURM_CPUS_PER_TASK`. The RDS holds trial records,
+dose/cycle counts, completed patient sequences and settings together.
+**Knitting reads this file; it does not rerun the simulation.**
 
-Lyu J, Curran E, Ji Y (2018). Bayesian Adaptive Design for Finding the Maximum
-Tolerated Sequence of Doses in Multicycle Dose-Finding Clinical Trials.
-*JCO Precision Oncology* 2:1-19.
-[DOI: 10.1200/PO.18.00020](https://doi.org/10.1200/PO.18.00020).
+## Scenario settings and conventions
 
-Guo W, Wang SJ, Yang S, Lynn H, Ji Y (2017). A Bayesian interval dose-finding
-design addressing Ockham's razor: mTPI-2. *Contemporary Clinical Trials*
-58:23-33. [DOI: 10.1016/j.cct.2017.04.006](https://doi.org/10.1016/j.cct.2017.04.006).
+There are three doses, three cycles, at most 15 patients and three patients
+per cohort. The target is 0.30, EI is (0.25, 0.35), and the posterior safety
+threshold is 0.95. For scenario-specific first-cycle probabilities,
 
-Separate implementation reference:
-[R documentation for lrstat::mTPI2Table](https://search.r-project.org/CRAN/refmans/lrstat/html/mTPI2Table.html).
-The local mTPI-2 code uses the beta-binomial interval calculation directly;
-it does not require this external package.
+$$
+p_{dj}=\min\{1,p_{d1}(1.1)^{j-1}\},\qquad j=1,2,3.
+$$
+
+The probability cap is explicit: in scenario 4 the literal multiplier gives
+$0.84(1.1)^2=1.0164$ for D3 in cycle 3, which is capped at one.
+
+Independent patient/cycle uniforms generate binary toxicity at the dose actually assigned:
+
+$$
+Y_{ij}=\mathbf{1}\{U_{ij}<p_{d_{ij},j}\},\qquad
+U_{ij}\overset{\mathrm{iid}}{\sim}\operatorname{Uniform}(0,1).
+$$
+
+This independence assumption is not fully specified by the paper. PAVA weights,
+nearest-target ties within an ordering, and the Figure 2/appendix safety
+convention are recorded in the saved settings and remain explicit function
+arguments. The Table 3 defaults use equal PAVA weights, the higher position
+in a within-order nearest-target tie, and the appendix safety rule (minimum
+sample size zero). The Table 2 section above demonstrates both tie choices.
+The comparison below is a reproduction attempt, **not a claim that
+all Table 3 numbers already agree**. Increasing simulation size cannot resolve
+a different implementation convention.
+
+```{r table3-read-data}
+source(lyu_path("simulate.R"))  # Defines functions; does not launch a simulation.
+table3_file <- lyu_path("data", "table3.rds")
+has_table3 <- file.exists(table3_file)
+if (has_table3) {
+  table3 <- readRDS(table3_file)
+  scenarios <- sort(unique(table3$trials$scenario))
+  recorded_scenarios <- table3$settings$value[table3$settings$setting == "scenarios"]
+  if (length(recorded_scenarios)) {
+    expected <- sort(as.integer(strsplit(recorded_scenarios, ",", fixed = TRUE)[[1]]))
+    stopifnot(identical(scenarios, expected))
+  }
+  table3_summary <- summarize_table3(table3)
+  published <- table3_reference()
+  nsim <- as.integer(table3$settings$value[
+    table3$settings$setting == "nsim_per_scenario"])
+  stopifnot(nrow(table3$trials) == length(scenarios) * nsim,
+            all(table(table3$trials$scenario) == nsim))
+} else {
+  cat("No saved Table 3 simulation yet. Run bash unity.sh 10000 auto 2018 locally.")
+}
+```
+
+```{r table3-run-details, eval=has_table3, results='asis'}
+cat("**Saved run:** ", nsim, " trials per scenario (", length(scenarios) * nsim,
+    " total).\n\n", sep = "")
+if (!is.null(table3$runtime_seconds)) {
+  cat(sprintf("**Total simulation runtime:** %.2f minutes (%.2f seconds).\n\n",
+              table3$runtime_seconds / 60, table3$runtime_seconds))
+  cat("Runtime is wall-clock simulation time, excluding queueing and file transfers.\n\n")
+}
+if (!is.null(table3$slurm)) knitr::kable(table3$slurm, caption = "Verified server job and runtime")
+if (nsim < 10000) cat("**Pilot only:** the paper used 10,000 trials per scenario.\n\n")
+knitr::kable(table3$settings)
+knitr::kable(subset(table3$truth, cycle == 1), digits = 3,
+             caption = "Scenario truths in cycle 1 and the true MTS")
+```
+
+## Reading the completed comparison
+
+The following compact table puts true-MTS selection and early termination
+side by side. The remaining plots show the full sequence-level comparison.
+
+```{r table3-summary-table, eval=has_table3}
+true_targets <- vapply(lyu_scenarios(), lyu_true_mts, character(1))
+overview <- do.call(rbind, lapply(scenarios, function(s) {
+  target <- true_targets[s]
+  paper <- subset(published$selection, scenario == s & sequence == target)
+  sim <- subset(table3_summary$selection, scenario == s & sequence == target)
+  data.frame(Scenario = s, True_MTS = target,
+    Paper_correct_selection_pct = if (nrow(paper)) 100 * paper$selection else NA_real_,
+    Sim_correct_selection_pct = 100 * sim$selection,
+    Paper_early_stop_pct = 100 * published$early_stop$stopped_early[published$early_stop$scenario == s],
+    Sim_early_stop_pct = 100 * table3_summary$early_stop$stopped_early[table3_summary$early_stop$scenario == s])
+}))
+knitr::kable(overview, digits = 2, row.names = FALSE)
+```
+
+In scenario 4, simulated "correct selection" means no MTS is recommended.
+The paper does not report that exact probability separately from its early
+termination probability, so its selection entry is left missing.
+
+## True toxicity curves and the true MTS
+
+The first plot follows the true toxicity of each fixed dose across cycles.
+The bold black path follows the true MTS dose in each cycle. The target is
+0.30 and the shaded EI is (0.25, 0.35). Scenario 4 has no safe MTS.
+
+```{r table3-true-cycle-curves, fig.width=12, fig.height=8, echo=FALSE, fig.cap='True dose/cycle probabilities. Colored lines hold dose fixed; the black path follows the true MTS. Labels give its dose in each cycle.'}
+truth_matrices <- lyu_scenarios()
+true_mts <- vapply(truth_matrices, lyu_true_mts, character(1))
+dose_colors <- c("#2471a3", "#229954", "#c0392b")
+old_par <- par(mfrow = c(2, 3), mar = c(4, 4, 3, 1))
+for (s in 1:6) {
+  p <- truth_matrices[[s]]
+  plot(1:3, rep(0, 3), type = "n", ylim = c(0, 1), xaxt = "n",
+       xlab = "Treatment cycle", ylab = "True DLT probability",
+       main = paste("Scenario", s, "| MTS", true_mts[s]))
+  rect(.8, .25, 3.2, .35, col = "#edf2f4", border = NA)
+  abline(h = .30, lty = 2, col = "#555555")
+  axis(1, at = 1:3)
+  for (d in 1:3) lines(1:3, p[d, ], type = "b", pch = 15 + d,
+                       col = dose_colors[d], lwd = 1.5)
+  if (true_mts[s] != "None") {
+    doses <- as.integer(strsplit(true_mts[s], ",", fixed = TRUE)[[1]])
+    y <- p[cbind(doses, 1:3)]
+    lines(1:3, y, type = "b", lwd = 3, col = "black", pch = 21, bg = "#f4d03f")
+    text(1:3, y, paste0("D", doses), pos = 1, cex = .8)
+  } else text(2, .15, "No safe MTS", col = "#c0392b")
+  if (s == 1) legend("topleft", c("D1", "D2", "D3", "True MTS"),
+                     col = c(dose_colors, "black"), lty = 1, cex = .7, bty = "n")
+}
+par(old_par)
+```
+
+For a nonincreasing sequence $s=(d_{s1},d_{s2},d_{s3})$, its true TPC is
+
+$$
+q_s=\frac{1}{3}\sum_{j=1}^3p_{d_{sj},j}.
+$$
+
+The next plot shows all ten nonincreasing candidate sequences against dose
+intensity $I_s=\sum_jd_{sj}$. Small horizontal offsets separate sequences with
+the same intensity; they do **not** impose a toxicity ordering. Blue points
+satisfy $p_{d_{sj},j}<0.35$ in every cycle, red points fail that criterion, and
+the gold point is the true MTS. A sequence can have TPC near 0.30 and still
+contain an unsafe dose/cycle cell.
+
+```{r table3-true-sequence-curves, fig.width=12, fig.height=8, echo=FALSE, fig.cap='True sequence TPC and safety. Gold marks the true MTS; scenario 4 has none. Sequence labels concatenate the three dose indices.'}
+candidate_paths <- as.matrix(expand.grid(d1 = 1:3, d2 = 1:3, d3 = 1:3))
+candidate_paths <- candidate_paths[apply(candidate_paths, 1, function(d) all(diff(d) <= 0)), ]
+intensity <- rowSums(candidate_paths)
+labels <- apply(candidate_paths, 1, paste, collapse = "")
+keys <- apply(candidate_paths, 1, paste, collapse = ",")
+offsets <- ave(intensity, intensity, FUN = function(x) {
+  if (length(x) == 1) 0 else seq(-.13, .13, length.out = length(x))
+})
+text_positions <- ave(intensity, intensity, FUN = function(x) rep(c(3, 1), length.out = length(x)))
+old_par <- par(mfrow = c(2, 3), mar = c(4, 4, 3, 1))
+for (s in 1:6) {
+  p <- truth_matrices[[s]]
+  q <- apply(candidate_paths, 1, function(d) mean(p[cbind(d, 1:3)]))
+  safe <- apply(candidate_paths, 1, function(d) all(p[cbind(d, 1:3)] < .35))
+  plot(intensity, q, type = "n", xlim = c(2.6, 9.4), ylim = c(0, 1), yaxt = "n",
+       xlab = "Sum of dose indices", ylab = "True sequence TPC",
+       main = paste("Scenario", s))
+  rect(2.6, .25, 9.4, .35, col = "#edf2f4", border = NA)
+  axis(2, at = seq(0, 1, .2), las = 1)
+  abline(h = .30, lty = 2, col = "#555555")
+  points(intensity + offsets, q, pch = 21,
+         bg = ifelse(safe, "#2471a3", "#e6a5a0"), col = "white", cex = 1.4)
+  selected <- which(keys == true_mts[s])
+  if (length(selected)) points(intensity[selected] + offsets[selected], q[selected],
+                               pch = 23, bg = "#f4d03f", cex = 2)
+  text(intensity + offsets, q, labels, pos = text_positions, cex = .65)
+  if (s == 1) legend("topleft", c("Safe cells", "Unsafe cell", "True MTS"),
+                     pch = c(21, 21, 23), pt.bg = c("#2471a3", "#e6a5a0", "#f4d03f"),
+                     cex = .7, bty = "n")
+  if (s == 4) text(6, .12, "All sequences contain unsafe doses", col = "#c0392b", cex = .8)
+}
+par(old_par)
+```
+
+Scenarios 1-2 have a moderately toxic lowest dose and only 15 patients, so
+early DLTs can limit exploration before the final recommendation. Scenario 3
+has safe upper doses and permits escalation to (3,3,3). Scenario 4 tests the
+ability to stop, rather than successful selection of a safe sequence. In
+scenario 5 the D2-to-D3 toxicity jump leaves (2,2,2) as the highest safe path,
+even though its TPC is below the EI; scenario 6 leaves only (1,1,1) safe.
+These are explanations from the truth settings, not guarantees of selection
+performance. The simulation plots below show the actual operating behavior.
+
+## MTS selection and completed-sequence outcomes
+
+For each published sequence, the selection probability and its Monte Carlo
+standard error are
+
+$$
+\widehat\pi_s=\frac{1}{B}\sum_{b=1}^B\mathbf{1}\{\widehat s_b=s\},
+\qquad \operatorname{MCSE}(\widehat\pi_s)
+=\sqrt{\widehat\pi_s(1-\widehat\pi_s)/B}.
+$$
+
+The mean and SD of DLTs below are calculated across completed patients with
+that actual sequence. Sequence allocation is their number divided by $15B$;
+patients with incomplete sequences are not assigned a completed sequence.
+These interpretations of the printed columns are stated explicitly for review.
+Selection/allocation numbers such as 0.190 are **proportions** (19.0%).
+
+```{r table3-sequence-comparison, eval=has_table3}
+comparison <- merge(published$selection, table3_summary$selection,
+                    by = c("scenario", "sequence"), suffixes = c("_paper", "_sim"))
+sequence_table <- with(comparison, data.frame(
+  Scenario = scenario, Sequence = sequence,
+  Paper_Pr = selection_paper, Sim_Pr = selection_sim,
+  Difference = selection_sim - selection_paper, MCSE = mcse,
+  Paper_DLT = sprintf("%.3f (%.3f)", mean_dlts_paper, sd_dlts_paper),
+  Sim_DLT = sprintf("%.3f (%.3f)", mean_dlts_sim, sd_dlts_sim),
+  Paper_allocation = allocation_paper, Sim_allocation = allocation_sim))
+knitr::kable(sequence_table, digits = 3, row.names = FALSE)
+```
+
+```{r table3-agreement, eval=has_table3, echo=FALSE, results='asis'}
+combined_mcse <- with(comparison, sqrt(selection_sim * (1-selection_sim) / nsim +
+                                        selection_paper * (1-selection_paper) / 10000))
+valid <- is.finite(comparison$selection_paper) & is.finite(comparison$selection_sim)
+cat(sprintf("Largest absolute selection difference: **%.2f percentage points**. ",
+            100 * max(abs(comparison$selection_sim[valid] - comparison$selection_paper[valid]))))
+cat(sum(abs(comparison$selection_sim[valid] - comparison$selection_paper[valid]) > 3 * combined_mcse[valid]),
+    "of", sum(valid), "published selection entries differ by more than three combined Monte Carlo standard errors.\n")
+```
+
+
+Only the paper's printed sequence rows for scenarios 1-6 are compared above; all simulated
+sequences and "None" are available in `table3_summary$selection`.
+
+## Dose/cycle counts and early termination
+
+Dose/cycle counts average over **all trials**, including early stops.
+
+```{r table3-cell-comparison, eval=has_table3}
+cell_comparison <- merge(published$cells, table3_summary$cells,
+                         by = c("scenario", "dose", "cycle"),
+                         suffixes = c("_paper", "_sim"))
+cell_table <- with(cell_comparison, data.frame(
+  Scenario = scenario, Dose = dose, Cycle = cycle,
+  Paper_DLT_of_N = sprintf("%.3f of %.3f", dlts_paper, n_paper),
+  Sim_DLT_of_N = sprintf("%.3f of %.3f", dlts_sim, n_sim)))
+knitr::kable(cell_table, row.names = FALSE)
+
+stop_comparison <- merge(published$early_stop, table3_summary$early_stop,
+                         by = "scenario", suffixes = c("_paper", "_sim"))
+stop_comparison[-1] <- 100 * stop_comparison[-1]
+knitr::kable(stop_comparison, digits = 2, row.names = FALSE,
+             caption = "Early termination (%)")
+```
+
+## Graphical comparison with the paper
+
+The bars compare selection of the true MTS in scenarios with a safe MTS,
+and early stopping in all scenarios. Scenario 4 has no safe MTS and is
+therefore assessed by early stopping rather than by a reported true-MTS
+selection probability. Error bars show simulation Monte Carlo uncertainty.
+
+```{r table3-key-metric-plots, eval=has_table3, fig.width=12, fig.height=4.5, echo=FALSE, fig.cap='Published versus simulated operating characteristics. Error bars are 95% Monte Carlo intervals for the simulation; they do not include uncertainty in the paper estimates.'}
+correct <- do.call(rbind, lapply(scenarios, function(s) {
+  target <- true_mts[s]
+  if (target == "None") return(NULL)
+  paper <- subset(published$selection, scenario == s & sequence == target)
+  sim <- subset(table3_summary$selection, scenario == s & sequence == target)
+  data.frame(scenario = s, paper = paper$selection, sim = sim$selection, se = sim$mcse)
+}))
+old_par <- par(mfrow = c(1, 2), mar = c(4, 4, 3, 1))
+colors <- c("#95a5a6", "#2471a3")
+values <- rbind(correct$paper, correct$sim)
+x <- barplot(values, beside = TRUE, col = colors, names.arg = paste0("S", correct$scenario),
+             ylim = c(0, min(1, max(values + .1))), ylab = "Probability",
+             main = "Selection of the true MTS", border = NA)
+nz <- correct$se > 0
+arrows(x[2, nz], pmax(0, correct$sim[nz] - 1.96 * correct$se[nz]),
+       x[2, nz], pmin(1, correct$sim[nz] + 1.96 * correct$se[nz]), angle = 90, code = 3, length = .04)
+legend("topright", c("Paper", "Simulation"), fill = colors, bty = "n", cex = .8)
+values <- rbind(stop_comparison$stopped_early_paper, stop_comparison$stopped_early_sim)
+x <- barplot(values, beside = TRUE, col = colors,
+             names.arg = paste0("S", stop_comparison$scenario), ylim = c(0, 105),
+             ylab = "Early termination (%)", main = "Stopping for excessive toxicity", border = NA)
+p <- stop_comparison$stopped_early_sim / 100
+se <- 100 * sqrt(p * (1-p) / nsim)
+nz <- se > 0
+arrows(x[2, nz], pmax(0, values[2, nz] - 1.96 * se[nz]),
+       x[2, nz], pmin(100, values[2, nz] + 1.96 * se[nz]), angle = 90, code = 3, length = .04)
+legend("topleft", c("Paper", "Simulation"), fill = colors, bty = "n", cex = .8)
+text(x, values, sprintf("%.2f", values), pos = 3, cex = .65)
+par(old_par)
+```
+
+The next plots compare **every numerically reported sequence-selection
+probability**, not just selection of the true MTS. Agreement would place
+points near the diagonal. Labels identify the true MTS and the two largest
+selection discrepancies within a scenario;
+the gold point marks the true MTS when it appears among the printed rows.
+
+```{r table3-all-selection-plots, eval=has_table3, fig.width=12, fig.height=8, echo=FALSE, fig.cap='Selection probabilities from the paper and simulation. The diagonal indicates agreement. Vertical intervals show 95% simulation Monte Carlo uncertainty.'}
+old_par <- par(mfrow = c(2, 3), mar = c(4, 4, 3, 1))
+for (s in scenarios) {
+  z <- subset(comparison, scenario == s & is.finite(selection_paper))
+  limit <- max(.1, z$selection_paper, z$selection_sim + 1.96 * z$mcse) * 1.15
+  plot(z$selection_paper, z$selection_sim, xlim = c(0, limit), ylim = c(0, limit),
+       xlab = "Paper selection probability", ylab = "Simulation selection probability",
+       main = paste("Scenario", s), pch = 21,
+       bg = ifelse(z$sequence == true_mts[s], "#f4d03f", "#2471a3"))
+  abline(0, 1, lty = 2, col = "#777777")
+  nz <- z$mcse > 0
+  arrows(z$selection_paper[nz], pmax(0, z$selection_sim[nz] - 1.96 * z$mcse[nz]),
+         z$selection_paper[nz], z$selection_sim[nz] + 1.96 * z$mcse[nz],
+         angle = 90, code = 3, length = .03, col = "#2471a3")
+  label <- unique(c(which(z$sequence == true_mts[s]),
+                     head(order(abs(z$selection_sim - z$selection_paper), decreasing = TRUE), 2)))
+  text(z$selection_paper[label], z$selection_sim[label], gsub(",", "", z$sequence[label]), pos = 4, cex = .65)
+}
+par(old_par)
+```
+
+Finally, dose/cycle allocation can agree even when final MTS selection differs.
+This comparison helps separate the trial-allocation engine from the final
+PAVA/voting convention. Each point is one dose/cycle cell.
+
+```{r table3-allocation-plots, eval=has_table3, fig.width=12, fig.height=8, echo=FALSE, fig.cap='Mean patient allocation per dose/cycle cell, averaged over all trials. The diagonal indicates agreement with Table 3.'}
+old_par <- par(mfrow = c(2, 3), mar = c(4, 4, 3, 1))
+for (s in scenarios) {
+  z <- subset(cell_comparison, scenario == s)
+  limit <- max(1, z$n_paper, z$n_sim) * 1.12
+  plot(z$n_paper, z$n_sim, xlim = c(0, limit), ylim = c(0, limit),
+       xlab = "Paper mean patients", ylab = "Simulation mean patients",
+       main = paste("Scenario", s), pch = 19, col = dose_colors[z$dose])
+  abline(0, 1, lty = 2, col = "#777777")
+  label <- z$n_paper > .2 | z$n_sim > .2
+  text(z$n_paper[label], z$n_sim[label], paste0("D", z$dose[label], "C", z$cycle[label]), pos = 4, cex = .6)
+}
+par(old_par)
+```
+
+## Remaining discrepancies
+
+```{r table3-final-diagnostics, eval=has_table3, echo=FALSE, results='asis'}
+allocation_rmse <- sqrt(mean((cell_comparison$n_sim - cell_comparison$n_paper)^2))
+cat(sprintf("Mean dose/cycle allocation RMSE versus the paper: **%.3f patients per cell**.\n\n", allocation_rmse))
+if (any(abs(comparison$selection_sim[valid] - comparison$selection_paper[valid]) > 3 * combined_mcse[valid])) {
+  cat("**This run does not fully reproduce Table 3 numerically.** Some sequence-selection discrepancies exceed Monte Carlo uncertainty. ",
+      "PAVA/tie handling, safety conventions and the outcome generator need further review; this comparison does not identify their individual contributions.\n\n")
+}
+no_mts <- do.call(rbind, lapply(scenarios, function(s) {
+  z <- subset(table3$trials, scenario == s)
+  data.frame(Scenario = s, No_MTS_pct = 100 * mean(z$selected_mts == "None"),
+              Early_stop_pct = 100 * mean(z$stopped_early),
+              No_MTS_without_early_stop_pct = 100 * mean(z$selected_mts == "None" & !z$stopped_early))
+}))
+knitr::kable(no_mts, digits = 2, row.names = FALSE,
+             caption = "Diagnostic: no recommendation versus an early-stopped trial")
+```
+
+A completed trial can return no MTS under the implemented final-vote rule
+when no nonincreasing sequence receives a vote. These cases are distinct
+from safety stopping. The table above exposes their frequency so that this
+implementation convention can be reviewed explicitly.
+
+The paper's column "patients treated above MTS" is not reconstructed here:
+the article does not give an explicit cross-cycle counting rule for that
+percentage. The dose/cycle counts are provided for direct checking; a new
+exposure definition should not silently be presented as the paper's definition.

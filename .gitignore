@@ -23,3 +23,9 @@ CRM_cache/
 CRM_files/
 **/*_cache/
 **/*_files/
+
+# One saved Table 3 simulation dataset; rebuilt with unity.sh.
+Lyu_2018/data/table3.rds
+Lyu_2018/data/table3.rds.tmp
+Lyu_2018/data/table3.rds.download
+Lyu_2018/table3.log
