@@ -36,11 +36,12 @@ lyu_true_mts <- function(p, target = .30, ei = c(.25, .35)) {
 # assumption; the paper does not provide a complete longitudinal generator.
 simulate_table3 <- function(nsim = 10000L, cores = 32L, seed = 2018L,
                             weights = "equal", nearest_tie = "higher",
-                            safety_min_n = 0L, scenarios = 1:6) {
+                            safety_min_n = 3L, scenarios = 1:6,
+                            mts_screen_min_n = 0L, no_mts_fallback = "restricted_revote") {
   start_time <- proc.time()[["elapsed"]]
   stopifnot(length(nsim) == 1, nsim >= 1, nsim <= 100000, nsim %% 1 == 0,
             length(seed) == 1, seed >= 1, seed <= .Machine$integer.max - 700000,
-            seed %% 1 == 0, safety_min_n %in% c(0, 3),
+            seed %% 1 == 0, safety_min_n %in% c(0, 3), mts_screen_min_n %in% c(0, 3),
             length(cores) == 1, cores >= 1, cores %% 1 == 0,
             length(scenarios) > 0, all(scenarios %in% 1:6), !anyDuplicated(scenarios))
   # Never use more cores than Slurm allocated to this R process.
@@ -48,12 +49,15 @@ simulate_table3 <- function(nsim = 10000L, cores = 32L, seed = 2018L,
   cores <- min(as.integer(cores), allocated, length(scenarios) * nsim)
   if (.Platform$OS.type == "windows") cores <- 1L
   weights <- match.arg(weights, c("equal", "patient_cycles"))
-  # For a flat nearest-target tie, default to the higher position, consistent
-  # with seeking the highest tolerated sequence. This convention is explicit;
-  # the appendix does not specify this within-order tie rule completely.
+  # Restore the original PAVA ordering and nearest-target tie convention.
+  # The fallback changes only a missing final recommendation; see select_mts().
   nearest_tie <- match.arg(nearest_tie, c("lower", "higher"))
+  no_mts_fallback <- match.arg(no_mts_fallback, c("restricted_revote", "none"))
   truth <- lyu_scenarios()
   target_mts <- vapply(truth, lyu_true_mts, character(1))
+  # Intratrial override: n >= 3 reproduces the printed Figure 2 decisions.
+  # The final MTS posterior screen retains the appendix's unqualified rule
+  # (minimum n=0). Keep these choices separate rather than changing both.
   settings <- basyc_settings(safety_min_n = safety_min_n)
   # Split trial indices into batches, allowing more workers than scenarios.
   # Fixed trial seeds make worker count/scheduling irrelevant.
@@ -71,13 +75,16 @@ simulate_table3 <- function(nsim = 10000L, cores = 32L, seed = 2018L,
       set.seed(trial_seed)
       uniforms <- matrix(runif(15L * 3L), nrow = 15L)
       fit <- run_basyc(uniforms, settings = settings, toxicity_prob = truth[[s]])
-      mts <- select_mts(fit, weights = weights, nearest_tie = nearest_tie)
+      mts <- select_mts(fit, weights = weights, nearest_tie = nearest_tie,
+                         screen_min_n = mts_screen_min_n,
+                         no_mts_fallback = no_mts_fallback)
       selected <- if (is.na(mts$recommendation)) "None" else mts$recommendation
       o <- fit$observed
       trials[[r]] <- data.frame(
         scenario = s, trial = b, seed = trial_seed, selected_mts = selected,
         true_mts = target_mts[s], correct_selection = selected == target_mts[s],
-        stopped_early = fit$stopped, n_enrolled = length(unique(fit$assignments$patient)),
+        stopped_early = fit$stopped, fallback_used = mts$fallback_used,
+        n_enrolled = length(unique(fit$assignments$patient)),
         n_complete = sum(tabulate(o$patient, nbins = 15L) == 3L),
         patient_cycles = nrow(o), dlts = sum(o$tox), end_week = fit$end_week)
       z <- expand.grid(dose = 1:3, cycle = 1:3)
@@ -122,10 +129,10 @@ simulate_table3 <- function(nsim = 10000L, cores = 32L, seed = 2018L,
   }))
   run_settings <- data.frame(
     setting = c("nsim_per_scenario", "scenarios", "cores", "seed", "maximum_patients", "cohort_size",
-                "cycles", "target", "EI", "xi", "safety_min_n", "pava_weights",
-                "nearest_tie", "outcome_generator", "probability_cap", "R_version", "created_utc", "host"),
-    value = c(nsim, paste(scenarios, collapse = ","), cores, seed, 15, 3, 3, .30, "(0.25,0.35)", .95, safety_min_n,
-              weights, nearest_tie, "independent patient/cycle Bernoulli", "pmin(p,1)",
+                "cycles", "target", "EI", "xi", "safety_min_n", "mts_screen_min_n", "pava_weights",
+                "nearest_tie", "clinical_ties", "no_mts_fallback", "outcome_generator", "probability_cap", "R_version", "created_utc", "host"),
+    value = c(nsim, paste(scenarios, collapse = ","), cores, seed, 15, 3, 3, .30, "(0.25,0.35)", .95, safety_min_n, mts_screen_min_n,
+              weights, nearest_tie, FALSE, no_mts_fallback, "independent patient/cycle Bernoulli", "pmin(p,1)",
               R.version.string, format(Sys.time(), tz = "UTC", usetz = TRUE),
               Sys.info()[["nodename"]]))
   result <- list(trials = combine("trials"), cells = combine("cells"),

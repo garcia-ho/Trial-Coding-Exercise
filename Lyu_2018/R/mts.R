@@ -34,7 +34,9 @@ permutations <- function(v) {
   }))
 }
 
-sequence_summary <- function(fit) {
+sequence_summary <- function(fit, screen_min_n = fit$settings$safety_min_n) {
+  stopifnot(length(screen_min_n) == 1, is.finite(screen_min_n),
+            screen_min_n >= 0, screen_min_n %% 1 == 0)
   o <- fit$observed
   complete <- which(tabulate(o$patient, nbins = fit$n_patient) == fit$n_cycle)
   if (!length(complete)) return(data.frame())
@@ -50,7 +52,9 @@ sequence_summary <- function(fit) {
   rows <- lapply(unique(key), function(s) {
     idx <- which(key == s)
     path <- doses[idx[1], ]
-    unsafe <- any(fit$settings$safety_min_n <= fit$counts$n[cbind(path, seq_along(path))] &
+    # The final posterior screen can have a different minimum n from the
+    # intratrial Figure 2 override. Simulations pass this choice explicitly.
+    unsafe <- any(screen_min_n <= fit$counts$n[cbind(path, seq_along(path))] &
       overdose_probability(fit$counts$x[cbind(path, seq_along(path))],
                            fit$counts$n[cbind(path, seq_along(path))],
                            fit$settings$target) > fit$settings$xi)
@@ -68,13 +72,17 @@ sequence_summary <- function(fit) {
 
 # weights and nearest_tie are REQUIRED: the appendix does not fully specify
 # PAVA weights or nearest-target ties WITHIN a possible simple ordering.
-select_mts <- function(fit, weights, nearest_tie, max_orders = 100000L) {
+select_mts <- function(fit, weights, nearest_tie, max_orders = 100000L,
+                        screen_min_n = fit$settings$safety_min_n,
+                        no_mts_fallback = "restricted_revote") {
   weights <- match.arg(weights, c("equal", "patient_cycles"))
   nearest_tie <- match.arg(nearest_tie, c("lower", "higher"))
-  tab <- sequence_summary(fit)
+  no_mts_fallback <- match.arg(no_mts_fallback, c("restricted_revote", "none"))
+  tab <- sequence_summary(fit, screen_min_n = screen_min_n)
   if (nrow(tab)) tab <- tab[tab$admissible, ]
   empty <- list(recommendation = NA_character_, sequences = tab,
-                votes = data.frame(), per_order = data.frame(), fitted = matrix(numeric(), 0, 0))
+                votes = data.frame(), per_order = data.frame(),
+                fitted = matrix(numeric(), 0, 0), fallback_used = FALSE)
   if (fit$stopped || !nrow(tab)) return(empty)
   rownames(tab) <- NULL
   groups <- split(seq_len(nrow(tab)), tab$intensity)
@@ -90,22 +98,46 @@ select_mts <- function(fit, weights, nearest_tie, max_orders = 100000L) {
   w <- if (weights == "equal") rep(1, nrow(tab)) else tab$patient_cycles
   fitted <- matrix(NA_real_, nrow(orders), nrow(tab), dimnames = list(NULL, tab$sequence))
   chosen <- integer(nrow(orders))
+  # Original within-order rule: select the first/last position among equally
+  # close candidates. There is no extra clinical tie preference after PAVA.
+  nearest <- function(q, candidates = seq_along(q)) {
+    distance <- abs(q[candidates] - fit$settings$target)
+    tied <- candidates[abs(distance - min(distance)) < 1e-12]
+    if (nearest_tie == "lower") min(tied) else max(tied)
+  }
   for (r in seq_len(nrow(orders))) {
     ord <- orders[r, ]
     q <- pava(tab$raw_tpc[ord], w[ord])
     fitted[r, ord] <- q
-    distance <- abs(q - fit$settings$target)
-    tied <- which(abs(distance - min(distance)) < 1e-12)
-    position <- if (nearest_tie == "lower") min(tied) else max(tied)
-    chosen[r] <- ord[position]
+    chosen[r] <- ord[nearest(q)]
   }
   votes <- tab[, c("sequence", "intensity", "nonincreasing")]
   votes$frequency <- tabulate(chosen, nbins = nrow(tab))
   # Appendix filters to nonincreasing paths AFTER obtaining per-order votes.
   eligible <- which(votes$nonincreasing & votes$frequency > 0)
+  frequency <- votes$frequency
+  votes$fallback_frequency <- 0L
+  fallback_chosen <- rep(NA_integer_, nrow(orders))
+  fallback_used <- FALSE
+  # NO-MTS fallback (an explicit completion, not specified in the appendix):
+  # Only if every original winner is increasing, repeat the nearest-target
+  # vote within the observed, safe, nonincreasing set. Reuse the ORIGINAL
+  # PAVA fits/orderings; do not refit, relax safety, or invent an unused path.
+  if (!length(eligible) && any(votes$nonincreasing) &&
+      no_mts_fallback == "restricted_revote") {
+    fallback_used <- TRUE
+    for (r in seq_len(nrow(orders))) {
+      ord <- orders[r, ]
+      positions <- which(votes$nonincreasing[ord])
+      fallback_chosen[r] <- ord[nearest(fitted[r, ord], positions)]
+    }
+    votes$fallback_frequency <- tabulate(fallback_chosen, nbins = nrow(tab))
+    frequency <- votes$fallback_frequency
+    eligible <- which(votes$nonincreasing & frequency > 0)
+  }
   recommendation <- NA_character_
   if (length(eligible)) {
-    best <- eligible[votes$frequency[eligible] == max(votes$frequency[eligible])]
+    best <- eligible[frequency[eligible] == max(frequency[eligible])]
     # Final frequency ties: lowest intensity, then lowest first, second, ...
     # dose. Numeric lexicographic ordering avoids multi-digit string ordering.
     path <- do.call(rbind, strsplit(votes$sequence[best], ",", fixed = TRUE))
@@ -116,6 +148,8 @@ select_mts <- function(fit, weights, nearest_tie, max_orders = 100000L) {
   list(recommendation = recommendation, sequences = tab, votes = votes,
        per_order = data.frame(order = seq_len(nrow(orders)),
                               ordering = apply(orders, 1, function(o) paste(tab$sequence[o], collapse = " < ")),
-                              selected = tab$sequence[chosen]),
-       fitted = fitted, weights = weights, nearest_tie = nearest_tie)
+                              selected = tab$sequence[chosen],
+                              fallback_selected = tab$sequence[fallback_chosen]),
+       fitted = fitted, weights = weights, nearest_tie = nearest_tie,
+       no_mts_fallback = no_mts_fallback, fallback_used = fallback_used)
 }

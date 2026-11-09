@@ -66,7 +66,7 @@ without rendering the report. Inputs in `data/` are kept separate from
 generated outputs in `results/`.
 
 The reproduction matches all 45 Table 2 dose assignments, all 30 continuation
-Go decisions, all 15 exits, and the week-56 finish; all 21 checks pass.
+Go decisions, all 15 exits, and the week-56 finish; all 30 checks pass.
 The report documents three source limitations:
 
 - At week 40, cycle 3 D2, Table 2 prints 1/6; its patient rows give 1/3.
@@ -142,15 +142,33 @@ is `r/4.5.1-5zezbzn`. Change the clearly marked values in `unity.sh` if needed.
 For example, prefix a command with `UNITY_TIME=00:30:00`. Simulations run on
 compute nodes, as required by the [Unity walk-through](https://osu.teamdynamix.com/TDClient/1929/ASC/KB/Article/61538/Unity-Walk-Through).
 
+The simulation default now requires **n >= 3** for intratrial safety, following
+Figure 2. Final MTS posterior screening has a separate `mts_screen_min_n = 0`
+argument, retaining the appendix's unqualified screen. Both settings are saved
+with new results. Original PAVA order enumeration and
+`nearest_tie = "higher"` are retained, without the combined clinical tie rule.
+`no_mts_fallback = "restricted_revote"` handles the case in which every
+original winner is increasing: retain the fitted TPCs and repeat the
+nearest-target vote among observed, safe, nonincreasing sequences. The final
+conservative frequency tie rule remains unchanged. Early stopping and an
+empty safe nonincreasing set still give no MTS. This fallback is an explicit
+completion of an appendix edge case, not a verified author implementation.
+
 Knitting the Rmd **only reads saved Table 3 data**. It lists the functions
 called and compares selection, completed-sequence DLT/allocation, dose/cycle
-counts and early termination with transcribed Table 3 values. Settings and
-unresolved publication details remain visible; this is not yet a validated
-numerical match to Table 3. The current saved data are the completed Unity run: 10,000 trials in each of
-all six scenarios (job 11387234). Simulation runtime was 215.262 seconds;
-Slurm job elapsed time was 221 seconds after 318 seconds queued. The job used
-28 R workers on 32 allocated CPUs in the Statistics partition. Selection
-results do not fully match the paper; the Rmd reports the discrepancies.
+counts and early termination with transcribed Table 3 values. No comparison
+with earlier simulation runs is displayed. Sections 5.2 and 6.3 state the
+NO-MTS rule and the saved data record each trial's fallback use. The report
+also gives runtime, settings and remaining discrepancies with the paper.
+The Table 2 allocation replay is unchanged; the illustrative MTS under
+the simulation's settings remains 221 without a fallback.
+
+The current saved run contains 10,000 trials in each of all six scenarios
+(Unity job 11389004): 32 CPUs, 209.164 seconds simulation runtime, 217 seconds
+Slurm elapsed time and 21 seconds queued. True-MTS selection is 40.05% in S5
+(paper 39.7%) and 43.81% in S6 (paper 45.0%). No completed trial returns no MTS
+in this run. Some sequence-selection and early-stopping discrepancies remain;
+the report displays them rather than claiming exact numerical reproduction.
 
 For direct access next time: `ssh asc-unity`, or in VS Code use
 **Cmd+Shift+P -> Remote-SSH: Connect to Host... -> asc-unity**. A remote VS Code

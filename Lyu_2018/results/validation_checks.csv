@@ -9,6 +9,7 @@
 "Appendix versus Figure 2 differs only at 2 DLTs / 2 patients",TRUE
 "The explicit minimum-n=3 convention matches all 135 cells of both Figure 2 panels",TRUE
 "The Figure 2 convention also reproduces all 45 Table 2 doses",TRUE
+"n>=3 preserves every Table 2 assignment, observed outcome and continuation decision",TRUE
 "No future outcomes leak into decisions made by week 16",TRUE
 "Three DLTs at the lowest dose stop the trial at week 8",TRUE
 "No-DLT replay respects dose boundaries and the first-cohort default",TRUE
@@ -20,3 +21,11 @@
 "PAVA rechecks larger blocks after a merge",TRUE
 "MTS considers 2! x 3! = 12 possible intensity-respecting orders",TRUE
 "Explicit within-order tie conventions expose different MTS outputs",TRUE
+"The restored PAVA rule retains Table 2 MTS 221 without using the fallback",TRUE
+"Original within-order PAVA ties give one vote each to 211 and 121",TRUE
+"The no-MTS fixture has only the increasing primary winner 212",TRUE
+"Restricted revoting selects safe observed 211, closest within the nonincreasing set",TRUE
+"The fallback preserves the original PAVA fits and primary winners",TRUE
+"The fallback never overrides early stopping",TRUE
+"The fallback never rescues excluded sequences",TRUE
+"No MTS remains when no observed safe nonincreasing sequence exists",TRUE

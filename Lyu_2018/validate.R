@@ -49,6 +49,11 @@ check("The explicit minimum-n=3 convention matches all 135 cells of both Figure 
 figure_fit <- run_basyc(outcomes, settings = basyc_settings(safety_min_n = 3))
 check("The Figure 2 convention also reproduces all 45 Table 2 doses",
       all(compare_table2_doses(figure_fit)$match))
+check("n>=3 preserves every Table 2 assignment, observed outcome and continuation decision",
+      identical(figure_fit$assignments, fit$assignments) &&
+      identical(figure_fit$observed, fit$observed) &&
+      identical(figure_fit$continuation, fit$continuation) &&
+      figure_fit$end_week == fit$end_week)
 
 # A future outcome must not alter an assignment already made at week 16.
 future_changed <- outcomes
@@ -95,10 +100,80 @@ check("MTS considers 2! x 3! = 12 possible intensity-respecting orders",
       nrow(lower$per_order) == 12 && sum(lower$votes$frequency) == 12)
 check("Explicit within-order tie conventions expose different MTS outputs",
       lower$recommendation == "2,1,1" && higher$recommendation == "2,2,1")
+revised_mts <- select_mts(figure_fit, weights = "equal", nearest_tie = "higher",
+                          screen_min_n = 0)
+check("The restored PAVA rule retains Table 2 MTS 221 without using the fallback",
+      revised_mts$recommendation == higher$recommendation &&
+      revised_mts$votes$frequency[revised_mts$votes$sequence == "2,2,1"] == 6 &&
+      !revised_mts$fallback_used)
 for (r in seq_len(nrow(lower$per_order))) {
   ord <- strsplit(lower$per_order$ordering[r], " < ", fixed = TRUE)[[1]]
   stopifnot(all(diff(lower$fitted[r, ord]) >= -1e-12))
 }
+
+# A small final-selection fixture, not a simulated or allocated trial:
+# 111 has 0/9, 211 has 3/9, 121 has 1/9. All dose/cycle cells pass screening.
+# In order 211<121, PAVA pools their TPCs; the restored rule selects the
+# higher position within that ordering, rather than imposing a clinical tie.
+fixture_paths <- rbind(matrix(1L, 3, 3), matrix(rep(c(2L,1L,1L), each=3), 3),
+                       matrix(rep(c(1L,2L,1L), each=3), 3))
+fixture_y <- matrix(0L, 9, 3)
+fixture_y[cbind(4:6, 1:3)] <- 1L
+fixture_y[7,2] <- 1L
+fixture_observed <- expand.grid(patient=1:9, cycle=1:3)
+fixture_observed$dose <- as.vector(fixture_paths)
+fixture_observed$tox <- as.vector(fixture_y)
+fixture <- list(observed=fixture_observed, n_patient=9L, n_cycle=3L,
+                settings=basyc_settings(safety_min_n=3), stopped=FALSE,
+                counts=dose_cycle_counts(fixture_observed,3,3),
+                snapshots=list(list(excluded=matrix(FALSE,3,3))))
+legacy <- select_mts(fixture, weights="equal", nearest_tie="higher")
+check("Original within-order PAVA ties give one vote each to 211 and 121",
+      nrow(legacy$per_order)==2 &&
+      identical(sort(legacy$per_order$selected), c("1,2,1","2,1,1")))
+
+# A deterministic missing-winner example, not a Monte Carlo trial:
+# raw TPCs for 111, 211 and 212 are 0, 1/9 and 2/9. All are safe.
+# The original nearest-target winner is 212, which is increasing.
+# The fallback must reuse those fits and select 211, closest among {111,211}.
+fallback_paths <- rbind(matrix(1L,3,3),
+                        matrix(rep(c(2L,1L,1L),each=3),3),
+                        matrix(rep(c(2L,1L,2L),each=3),3))
+fallback_y <- matrix(0L,9,3)
+fallback_y[4,1] <- fallback_y[7,3] <- fallback_y[8,2] <- 1L
+fallback_fit <- fixture
+fallback_fit$observed$dose <- as.vector(fallback_paths)
+fallback_fit$observed$tox <- as.vector(fallback_y)
+fallback_fit$counts <- dose_cycle_counts(fallback_fit$observed,3,3)
+without <- select_mts(fallback_fit, weights="equal", nearest_tie="higher",
+                       screen_min_n=0, no_mts_fallback="none")
+with_fallback <- select_mts(fallback_fit, weights="equal", nearest_tie="higher",
+                             screen_min_n=0)
+check("The no-MTS fixture has only the increasing primary winner 212",
+      is.na(without$recommendation) && all(without$per_order$selected=="2,1,2"))
+check("Restricted revoting selects safe observed 211, closest within the nonincreasing set",
+      with_fallback$fallback_used && with_fallback$recommendation=="2,1,1" &&
+      all(with_fallback$per_order$fallback_selected=="2,1,1"))
+check("The fallback preserves the original PAVA fits and primary winners",
+      identical(without$fitted,with_fallback$fitted) &&
+      identical(without$per_order$selected,with_fallback$per_order$selected))
+stopped_fixture <- fallback_fit
+stopped_fixture$stopped <- TRUE
+stopped_mts <- select_mts(stopped_fixture,weights="equal",nearest_tie="higher")
+check("The fallback never overrides early stopping",
+      is.na(stopped_mts$recommendation) && !stopped_mts$fallback_used)
+unsafe_fixture <- fallback_fit
+unsafe_fixture$snapshots[[1]]$excluded[,] <- TRUE
+unsafe_mts <- select_mts(unsafe_fixture,weights="equal",nearest_tie="higher")
+check("The fallback never rescues excluded sequences",
+      is.na(unsafe_mts$recommendation) && !unsafe_mts$fallback_used)
+increasing_fixture <- fallback_fit
+increasing_fixture$observed$dose <- rep(c(2L,1L,2L),each=9)
+increasing_fixture$observed$tox <- 0L
+increasing_fixture$counts <- dose_cycle_counts(increasing_fixture$observed,3,3)
+increasing_mts <- select_mts(increasing_fixture,weights="equal",nearest_tie="higher")
+check("No MTS remains when no observed safe nonincreasing sequence exists",
+      is.na(increasing_mts$recommendation) && !increasing_mts$fallback_used)
 
 dir.create(lyu_path("results"), showWarnings = FALSE)
 write.csv(checks, lyu_path("results", "validation_checks.csv"), row.names = FALSE)
