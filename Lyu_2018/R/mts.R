@@ -98,8 +98,8 @@ select_mts <- function(fit, weights, nearest_tie, max_orders = 100000L,
   w <- if (weights == "equal") rep(1, nrow(tab)) else tab$patient_cycles
   fitted <- matrix(NA_real_, nrow(orders), nrow(tab), dimnames = list(NULL, tab$sequence))
   chosen <- integer(nrow(orders))
-  # Original within-order rule: select the first/last position among equally
-  # close candidates. There is no extra clinical tie preference after PAVA.
+  # Resolve nearest-target ties by position in this ordering. The simulation
+  # uses the original higher-position rule, also during fallback revoting.
   nearest <- function(q, candidates = seq_along(q)) {
     distance <- abs(q[candidates] - fit$settings$target)
     tied <- candidates[abs(distance - min(distance)) < 1e-12]

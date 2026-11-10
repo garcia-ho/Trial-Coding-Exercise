@@ -102,7 +102,7 @@ check("Explicit within-order tie conventions expose different MTS outputs",
       lower$recommendation == "2,1,1" && higher$recommendation == "2,2,1")
 revised_mts <- select_mts(figure_fit, weights = "equal", nearest_tie = "higher",
                           screen_min_n = 0)
-check("The restored PAVA rule retains Table 2 MTS 221 without using the fallback",
+check("The legacy higher-position option gives Table 2 MTS 221 without a fallback",
       revised_mts$recommendation == higher$recommendation &&
       revised_mts$votes$frequency[revised_mts$votes$sequence == "2,2,1"] == 6 &&
       !revised_mts$fallback_used)
@@ -175,6 +175,80 @@ increasing_mts <- select_mts(increasing_fixture,weights="equal",nearest_tie="hig
 check("No MTS remains when no observed safe nonincreasing sequence exists",
       is.na(increasing_mts$recommendation) && !increasing_mts$fallback_used)
 
+# Strict n > 3 is retained for all posterior safety checks.
+strict <- basyc_settings(safety_min_n=4)
+strict_fit <- run_basyc(outcomes,settings=strict)
+check("Strict n>3 preserves every Table 2 allocation, outcome, continuation and week-56 finish",
+      identical(strict_fit$assignments,fit$assignments) &&
+      identical(strict_fit$observed,fit$observed) &&
+      identical(strict_fit$continuation,fit$continuation) && strict_fit$end_week==56)
+check("Strict n>3 defers DU at 3/3 and applies it at 4/4",
+      mtpi2_decision(3,3,strict)=="D" && mtpi2_decision(4,4,strict)=="DU")
+strict_counts <- list(x=matrix(0L,3,3),n=matrix(0L,3,3))
+strict_counts$x[1,2] <- strict_counts$n[1,2] <- 3L
+at_three <- update_safety(strict_counts,matrix(FALSE,3,3),strict)
+go_three <- dcr(1,strict_counts,strict)
+strict_counts$x[1,2] <- strict_counts$n[1,2] <- 4L
+at_four <- update_safety(strict_counts,matrix(FALSE,3,3),strict)
+check("The same strict minimum governs DCR, global stopping and exclusion",
+      go_three=="G" && !at_three$stop_trial && !any(at_three$excluded) &&
+      dcr(1,strict_counts,strict)=="NG" && at_four$stop_trial &&
+      all(at_four$excluded[,2:3]))
+
+# Current simulation: original PAVA ties plus the delayed global-safety mode.
+current_fit <- run_basyc(outcomes,settings=strict,global_monitor="after_first_sequence")
+check("Delayed global monitoring preserves all Table 2 assignments, outcomes and decisions",
+      identical(current_fit$assignments,fit$assignments) &&
+      identical(current_fit$observed,fit$observed) &&
+      identical(current_fit$continuation,fit$continuation) && current_fit$end_week==56)
+check("Global safety starts at the first cohort's complete sequence, week 24",
+      current_fit$global_start_week==24 &&
+      !current_fit$snapshots[["16"]]$global_active &&
+      current_fit$snapshots[["24"]]$global_active)
+current_table2 <- select_mts(current_fit,weights="equal",nearest_tie="higher",screen_min_n=0)
+check("The current Table 2 illustration selects 221 without a fallback",
+      current_table2$recommendation=="2,2,1" && !current_table2$fallback_used)
+
+# Fixed binary outcomes expose the difference in monitoring activation.
+# At week 16 D1/C1 is 4/6 (unsafe); at week 24 it is 4/9 (below the cutoff).
+early_y <- matrix(0L,15,3)
+early_y[c(1,2,4,5),1] <- 1L
+early_continuous <- run_basyc(early_y,settings=strict)
+early_delayed <- run_basyc(early_y,settings=strict,global_monitor="after_first_sequence")
+check("The timing fixture stops at week 16 under continuous monitoring",
+      early_continuous$stopped && early_continuous$end_week==16)
+check("The delayed mode uses updated week-24 data and completes the timing fixture",
+      !early_delayed$stopped && early_delayed$end_week==56 &&
+      early_delayed$global_start_week==24)
+check("Permanent exclusion waits with global stopping; DCR operates before activation",
+      !any(early_delayed$snapshots[["16"]]$excluded) &&
+      all(subset(early_delayed$continuation,week<24)$decision=="G"))
+
+# With six early DLTs, the risk remains excessive at activation and must stop.
+persistent_y <- matrix(0L,15,3); persistent_y[1:6,1] <- 1L
+persistent <- run_basyc(persistent_y,settings=strict,global_monitor="after_first_sequence")
+check("Persistent unsafe data stop the trial at activation before further allocation",
+      persistent$stopped && persistent$end_week==24 &&
+      !any(persistent$assignments$week>=24) &&
+      persistent$stop_event$cycle==1 && persistent$stop_event$n==9 &&
+      persistent$stop_event$x==6 && persistent$stop_event$risk>.95)
+
+# C3 becomes unsafe for the first time at the final visit (8/15 DLTs).
+# All treatment has ended: retain final safety exclusion, without an early stop.
+terminal_y <- matrix(0L,15,3)
+terminal_y[c(1,4,7,8,10,11,13,14),3] <- 1L
+terminal_continuous <- run_basyc(terminal_y,settings=strict)
+terminal_delayed <- run_basyc(terminal_y,settings=strict,global_monitor="after_first_sequence")
+check("A final-visit safety crossing is not labelled early termination in the experimental mode",
+      terminal_continuous$stopped && terminal_continuous$end_week==56 &&
+      !terminal_delayed$stopped && terminal_delayed$end_week==56 &&
+      identical(terminal_continuous$observed,terminal_delayed$observed) &&
+      nrow(terminal_delayed$observed)==45)
+terminal_mts <- select_mts(terminal_delayed,weights="equal",nearest_tie="higher",screen_min_n=0)
+check("Final unsafe data still exclude all C3 doses and give no MTS, without a fallback rescue",
+      all(terminal_delayed$snapshots[["56"]]$excluded[,3]) &&
+      is.na(terminal_mts$recommendation) && !terminal_mts$fallback_used)
+
 dir.create(lyu_path("results"), showWarnings = FALSE)
 write.csv(checks, lyu_path("results", "validation_checks.csv"), row.names = FALSE)
 write.csv(fit$assignments, lyu_path("results", "assignments.csv"), row.names = FALSE)
@@ -182,6 +256,6 @@ write.csv(fit$observed, lyu_path("results", "observed_outcomes.csv"), row.names 
 write.csv(fit$continuation, lyu_path("results", "continuation.csv"), row.names = FALSE)
 write.csv(totals, lyu_path("results", "cumulative_counts_comparison.csv"), row.names = FALSE)
 write.csv(appendix_table, lyu_path("results", "appendix_decision_table.csv"), row.names = FALSE)
-write.csv(lower$per_order, lyu_path("results", "mts_ordering_votes.csv"), row.names = FALSE)
+write.csv(current_table2$per_order, lyu_path("results", "mts_ordering_votes.csv"), row.names = FALSE)
 print(checks, row.names = FALSE)
 cat("\n", nrow(checks), "checks passed.\n", sep = "")

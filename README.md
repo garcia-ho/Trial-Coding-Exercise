@@ -14,6 +14,8 @@ multicycle BaSyc design of Lyu et al. (2018).
 - `Drug_combo_Boin/Drug_combo_Boin.html`: rendered combination-BOIN report
 - `Lyu_2018/reproduce_table2.Rmd`: BaSyc formulas, Table 2 replay and checks
 - `Lyu_2018/reproduce_table2.html`: rendered BaSyc report
+- `Lyu_2018/simulation_exploration.Rmd`: saved-result allocation and scenario analysis, with a conceptual copula stress-test proposal
+- `Lyu_2018/simulation_exploration.html`: rendered exploration report
 - `Lyu_2018/R/`: commented mTPI-2, allocation, safety, MTS and table functions
 - `Lyu_2018/validate.R`: independently runnable reproduction checks
 - `Lyu_2018/data/`: transcribed outcomes, expected doses and printed count tables
@@ -32,6 +34,7 @@ From the project root, rebuild individual reports directly:
 rmarkdown::render("CRM/CRM.Rmd")
 rmarkdown::render("Drug_combo_Boin/Drug_combo_Boin.Rmd")
 rmarkdown::render("Lyu_2018/reproduce_table2.Rmd")
+rmarkdown::render("Lyu_2018/simulation_exploration.Rmd")
 ```
 
 ## Lyu 2018: run and review
@@ -66,7 +69,7 @@ without rendering the report. Inputs in `data/` are kept separate from
 generated outputs in `results/`.
 
 The reproduction matches all 45 Table 2 dose assignments, all 30 continuation
-Go decisions, all 15 exits, and the week-56 finish; all 30 checks pass.
+Go decisions, all 15 exits, and the week-56 finish; all 42 checks pass.
 The report documents three source limitations:
 
 - At week 40, cycle 3 D2, Table 2 prints 1/6; its patient rows give 1/3.
@@ -121,7 +124,7 @@ scheduler wait and upload/download time.
 
 The remote working folder is `~/trial-coding-exercise`. Files persist there.
 Rsync updates changed source files and skips generated results, the saved RDS,
-and installed Mac packages. There are no per-run folders or separate reports.
+and installed Mac packages. There are no per-run folders.
 Each successful new simulation replaces `data/table3.rds` and updates the same
 HTML report. The job's single diagnostic log stays on Unity as
 `Lyu_2018/table3.log`; it is not downloaded.
@@ -142,11 +145,28 @@ is `r/4.5.1-5zezbzn`. Change the clearly marked values in `unity.sh` if needed.
 For example, prefix a command with `UNITY_TIME=00:30:00`. Simulations run on
 compute nodes, as required by the [Unity walk-through](https://osu.teamdynamix.com/TDClient/1929/ASC/KB/Article/61538/Unity-Walk-Through).
 
-The simulation default now requires **n >= 3** for intratrial safety, following
-Figure 2. Final MTS posterior screening has a separate `mts_screen_min_n = 0`
+The simulation default requires strict **n > 3** for intratrial safety,
+implemented by `safety_min_n = 4`. The same minimum governs DCR, global
+termination and permanent dose exclusion/DU. It is an explicit simulation
+hypothesis; Figure 2's printed 3/3 decision uses a different minimum.
+Final MTS posterior screening has a separate `mts_screen_min_n = 0`
 argument, retaining the appendix's unqualified screen. Both settings are saved
-with new results. Original PAVA order enumeration and
-`nearest_tie = "higher"` are retained, without the combined clinical tie rule.
+with new results. PAVA weights remain equal and order enumeration is
+unchanged. `nearest_tie = "higher"` uses the original higher-position rule
+for nearest-target ties, including in the existing fallback. The
+target-dependent convention is not used.
+
+`global_monitor = "after_first_sequence"` separates global safety from DCR:
+DCR operates from week 8, while global termination and permanent exclusion
+both begin when cohort 1 completes all three cycles (week 24). Outcomes due
+are observed first; active global safety checks precede further treatment
+and enrollment. A final visit after all treatment is complete does not count
+as early termination, but its data still inform final safety and MTS selection.
+The RDS records global activation and the first stopping cell's counts/risk.
+This is an explicit sensitivity experiment; the paper describes safety
+monitoring throughout the trial. Delaying exclusion with termination avoids
+an incoherent state with no admissible dose but an instruction to continue.
+
 `no_mts_fallback = "restricted_revote"` handles the case in which every
 original winner is increasing: retain the fitted TPCs and repeat the
 nearest-target vote among observed, safe, nonincreasing sequences. The final
@@ -160,15 +180,11 @@ counts and early termination with transcribed Table 3 values. No comparison
 with earlier simulation runs is displayed. Sections 5.2 and 6.3 state the
 NO-MTS rule and the saved data record each trial's fallback use. The report
 also gives runtime, settings and remaining discrepancies with the paper.
-The Table 2 allocation replay is unchanged; the illustrative MTS under
-the simulation's settings remains 221 without a fallback.
-
-The current saved run contains 10,000 trials in each of all six scenarios
-(Unity job 11389004): 32 CPUs, 209.164 seconds simulation runtime, 217 seconds
-Slurm elapsed time and 21 seconds queued. True-MTS selection is 40.05% in S5
-(paper 39.7%) and 43.81% in S6 (paper 45.0%). No completed trial returns no MTS
-in this run. Some sequence-selection and early-stopping discrepancies remain;
-the report displays them rather than claiming exact numerical reproduction.
+The Table 2 allocation replay is unchanged; the current illustration
+selects 221 without using a fallback. Table 2 publishes no MTS.
+The saved RDS and report give the current run's settings, runtime, server
+job details and comparison with the paper for all six scenarios. These
+details are read from the saved run rather than duplicated here.
 
 For direct access next time: `ssh asc-unity`, or in VS Code use
 **Cmd+Shift+P -> Remote-SSH: Connect to Host... -> asc-unity**. A remote VS Code
@@ -195,3 +211,14 @@ sessions and remote VS Code terminals are configured to use it. The original
 `.bashrc` was backed up on Unity; `.zshrc` was preserved. Slurm and noninteractive
 SSH commands continue using bash. The managed account login shell is unchanged;
 ASCTech must change that directory-service setting if desired.
+
+## Saved-result exploration
+
+`Lyu_2018/simulation_exploration.Rmd` reads the existing `data/table3.rds`
+without sourcing the simulator or generating trial outcomes. It displays
+recommendation categories, dose/cycle allocation bars and heatmaps, completed
+patient transitions, and true-MTS coverage versus selection. Scenario-specific
+interpretations distinguish exploration, selection and patient exposure.
+The final section proposes one- and two-parameter copula stress tests; no
+copula generator or new simulation is implemented. Knit this report separately
+when the saved RDS changes; `unity.sh` continues to render the reproduction report.

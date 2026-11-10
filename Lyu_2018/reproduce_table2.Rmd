@@ -302,9 +302,11 @@ knitr::kable(sequence_summary(fit), digits = 4)
 Let $R$ contain the completed, observed sequences passing safety,
 and $N=\{s\in R:d_{s1}\ge d_{s2}\ge d_{s3}\}$.
 Order by intensity $I(s)=\sum_jd_{sj}$, permute equal-intensity sequences,
-and apply equal-weight PAVA over each full ordering $w$. Retain the original
-`nearest_tie = "higher"`: tied nearest candidates use the later position
-in that ordering, with no additional clinical preference.
+and apply equal-weight PAVA over each full ordering $w$.
+Use `nearest_tie = "higher"`: among nearest-target candidates, choose the
+later position in that ordering. The same convention is used for pooled
+blocks below, at and above target. Equal PAVA weights, order enumeration
+and the final conservative frequency tie rule are retained.
 
 The usual recommendation takes the most frequent nonincreasing winner:
 
@@ -325,8 +327,9 @@ D_w^{F}=\arg\min_{s\in N}|\widehat q_{sw}-0.30|,
 \qquad \widehat s=\arg\max_{s\in N}f^{F}(s).
 $$
 
-Within-order distance ties still use the later position. Final frequency
-ties use the appendix's conservative rule: lower intensity, then lower
+The same higher-position tie rule applies in the ordinary vote and the
+fallback revote. Final frequency ties use the appendix's conservative rule:
+lower intensity, then lower
 first-, second- and third-cycle doses. **Early stopping or an empty
 $N$ still gives no MTS.** The fallback never creates an unused
 sequence, relaxes safety, or refits PAVA. It completes an edge case not
@@ -379,8 +382,10 @@ The simulation call performed on Unity is:
 ```{r table3-reproduction-call, eval=FALSE}
 source("Lyu_2018/simulate.R")
 result <- simulate_table3(nsim = 10000, cores = 32, seed = 2018, scenarios = 1:6,
-                          safety_min_n = 3, mts_screen_min_n = 0,
-                          no_mts_fallback = "restricted_revote")
+                          weights = "equal", nearest_tie = "higher",
+                          safety_min_n = 4, mts_screen_min_n = 0,
+                          no_mts_fallback = "restricted_revote",
+                          global_monitor = "after_first_sequence")
 saveRDS(result, "Lyu_2018/data/table3.rds")
 ```
 
@@ -412,40 +417,78 @@ $$
 
 The outcome independence assumption, equal PAVA weights and within-order
 distance-tie convention are explicit implementation choices. The simulation
-uses the original PAVA ordering, `nearest_tie = "higher"`, and minimum
-**n >= 3 for intratrial safety**. Other statistical settings remain fixed.
+uses the original PAVA ordering, `nearest_tie = "higher"`, and strict
+**n > 3 for intratrial safety**. Other statistical settings remain fixed.
 
 The intratrial safety override is now
 
 $$
 \operatorname{unsafe}_{dj}
-=\mathbf{1}\{n_{dj}\ge3\}
+=\mathbf{1}\{n_{dj}>3\}
  \mathbf{1}\{\Pr(p_{dj}>0.30\mid D)>0.95\}.
 $$
 
-This follows the printed Figure 2 convention: 2/2 gives G/D while 3/3 gives
-NG/DU. It applies to continuation, global stopping and permanent exclusion
-during allocation. The written appendix omits this minimum, so the Figure 2
-interpretation is explicit. **Final MTS posterior screening is separate**:
-`mts_screen_min_n = 0` retains the appendix's unqualified posterior screen;
-permanent intratrial exclusions remain in force. Both minima are recorded
-with each newly generated dataset.
+Setting `safety_min_n = 4` implements strict n > 3. It is a simulation
+hypothesis: Figure 2 shows NG/DU at 3/3, while this run defers that override.
+The written appendix does not state a minimum.
+
+**Global monitoring is separate from DCR in this experiment.** DCR remains
+active from the first cycle assessment (week 8), using its next-cycle
+lowest-dose posterior and the n > 3 minimum. Global termination (Rule 1)
+and permanent exclusion (Rule 2) both begin after the first cohort has
+completed all three cycles (week 24). Before activation, an mTPI-2 DU
+decision makes the de-escalation move but does not permanently exclude doses.
+Both global rules start together because exclusion alone could otherwise
+remove every available dose while termination is deferred.
+
+At each assessment, observe all outcomes due and update cumulative counts
+first. Once global monitoring is active, evaluate safety before additional
+treatment or enrollment. Define
+
+$$
+A(t)=\mathbf1\{\text{cohort 1 has completed all cycles by }t\},
+\qquad F(t)=\mathbf1\{\text{further treatment is planned}\}.
+$$
+
+$$
+\operatorname{EarlyStop}(t)
+=A(t)F(t)\,\mathbf1\{\exists j:n_{1j}(t)>3,\quad
+\Pr(p_{1j}>0.30\mid D_t)>0.95\}.
+$$
+
+DCR does not use the activation indicator $A(t)$. At the final visit,
+all treatment has ended, so $F(t)=0$: a newly detected unsafe cell still
+informs exclusion and final MTS screening, but is not labelled early
+termination. The RDS records each trial's global start week and the cycle,
+DLTs, sample size and posterior risk at an early stop.
+
+**This delayed start is a sensitivity hypothesis, not a statement of the
+authors' implementation.** The paper says the safety rules operate throughout
+the trial. The experiment tests an alternative initialization and assessment
+schedule while retaining the numerical safety boundaries and the DCR rule.
+
+**Final MTS posterior screening remains separate:** `mts_screen_min_n = 0`
+retains the appendix's unqualified screen. Permanent exclusions after global
+activation remain in force. A trial completed without an early stop may
+therefore have no MTS if its final safety screen leaves no admissible path.
+
 The comparison below is a reproduction attempt, **not a claim that
 all Table 3 numbers already agree**. Increasing simulation size cannot resolve
 a different implementation convention.
 
 ## Final-selection convention and NO-MTS fallback
 
-Use the PAVA/voting rule in Section 5.2, without the combined clinical tie
-preference. **NO-MTS fallback:** only if all original winners are increasing,
-repeat the nearest-target vote among observed, safe, nonincreasing sequences
-using the unchanged PAVA fits. Early stopping or no such safe sequence still
-returns no MTS. This added convention is not specified by the paper and was
-chosen before this run; it is not tuned separately by scenario.
+Use the original PAVA/voting convention in Section 5.2: equal weights and
+higher-position within-order ties. **NO-MTS fallback:** only if all original
+winners are increasing, repeat the nearest-target vote among observed,
+safe, nonincreasing sequences using the same PAVA fits. Early stopping or
+no such safe sequence still gives no MTS. The fallback structure and final
+posterior screen are unchanged.
 
-The allocation engine is unchanged. The n >= 3 safety rule still reproduces
-all Table 2 assignments, outcomes, continuation decisions and the week-56
-finish. Its illustrative MTS remains (2,2,1), without using the fallback.
+The strict n > 3, delayed-global-monitoring replay reproduces all Table 2
+assignments, outcomes, continuation decisions and the week-56 finish.
+Its illustrative MTS is (2,2,1), without using a fallback. Table 2 does not
+publish a final MTS.
 
 ```{r table3-read-data, echo=FALSE}
 source(lyu_path("simulate.R"))  # Defines functions; does not launch a simulation.
@@ -485,9 +528,17 @@ if (!is.null(table3$slurm)) {
   print(knitr::kable(server, caption = "Verified server job and runtime"))
 }
 stored_min_n <- as.integer(table3$settings$value[table3$settings$setting == "safety_min_n"])
-if (stored_min_n != 3L) {
-  cat("**Saved results predate the safety change:** these results used intratrial minimum n=",
-      stored_min_n, ". They have not been rerun under the new default n=3.\n\n", sep = "")
+if (stored_min_n != 4L) {
+  cat("**Saved results do not use strict n > 3:** minimum n=",
+      stored_min_n, " was recorded. Rerun before interpreting this report.\n\n", sep = "")
+}
+stored_tie <- table3$settings$value[table3$settings$setting == "nearest_tie"]
+if (!length(stored_tie) || stored_tie != "higher") {
+  cat("**Saved results do not use higher-position ties; rerun before interpreting this report.**\n\n")
+}
+stored_monitor <- table3$settings$value[table3$settings$setting == "global_monitor"]
+if (!length(stored_monitor) || stored_monitor != "after_first_sequence") {
+  cat("**Saved results do not use the delayed global-monitoring experiment; rerun before interpreting this report.**\n\n")
 }
 stored_fallback <- table3$settings$value[table3$settings$setting == "no_mts_fallback"]
 if (!length(stored_fallback) || stored_fallback != "restricted_revote") {
@@ -779,35 +830,3 @@ for (s in scenarios) {
 }
 par(old_par)
 ```
-
-## Remaining discrepancies
-
-```{r table3-final-diagnostics, eval=has_table3, echo=FALSE, results='asis'}
-allocation_rmse <- sqrt(mean((cell_comparison$n_sim - cell_comparison$n_paper)^2))
-cat(sprintf("Mean dose/cycle allocation RMSE versus the paper: **%.3f patients per cell**.\n\n", allocation_rmse))
-if (any(abs(comparison$selection_sim[valid] - comparison$selection_paper[valid]) > 3 * combined_mcse[valid])) {
-  cat("**This run does not fully reproduce Table 3 numerically.** Some sequence-selection discrepancies exceed Monte Carlo uncertainty. ",
-      "PAVA/tie handling, safety conventions and the outcome generator need further review; this comparison does not identify their individual contributions.\n\n")
-}
-no_mts <- do.call(rbind, lapply(scenarios, function(s) {
-  z <- subset(table3$trials, scenario == s)
-  data.frame(Scenario = s, No_MTS_pct = 100 * mean(z$selected_mts == "None"),
-              Early_stop_pct = 100 * mean(z$stopped_early),
-              Fallback_used_pct = if ("fallback_used" %in% names(z))
-                100 * mean(z$fallback_used) else NA_real_,
-              No_MTS_without_early_stop_pct = 100 * mean(z$selected_mts == "None" & !z$stopped_early))
-}))
-knitr::kable(no_mts, digits = 2, row.names = FALSE,
-             caption = "Diagnostic: no recommendation versus an early-stopped trial")
-```
-
-**NO-MTS rule:** early-stopped trials and trials with no observed, safe,
-nonincreasing candidate return no recommendation. A zero-vote candidate set
-alone now triggers restricted revoting, as defined in Sections 5.2 and 6.3.
-The diagnostic table records fallback use as a percentage of all trials,
-separately from early stopping and genuine no-MTS cases.
-
-The paper's column "patients treated above MTS" is not reconstructed here:
-the article does not give an explicit cross-cycle counting rule for that
-percentage. The dose/cycle counts are provided for direct checking; a new
-exposure definition should not silently be presented as the paper's definition.

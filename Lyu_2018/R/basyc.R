@@ -92,7 +92,8 @@ dar2 <- function(current_dose, current_tox, cycle, previous_doses,
 # is I(U < p[d,j]) at the dose ACTUALLY assigned. Future outcomes stay hidden.
 run_basyc <- function(outcomes, cohort_size = 3L, cycle_weeks = 8L,
                       settings = basyc_settings(), decision_fun = mtpi2_decision,
-                      toxicity_prob = NULL) {
+                      toxicity_prob = NULL, global_monitor = "continuous") {
+  global_monitor <- match.arg(global_monitor, c("continuous", "after_first_sequence"))
   outcomes <- as.matrix(outcomes)
   stopifnot(nrow(outcomes) > 0, ncol(outcomes) > 0,
             cohort_size >= 1, cohort_size %% 1 == 0,
@@ -120,6 +121,8 @@ run_basyc <- function(outcomes, cohort_size = 3L, cycle_weeks = 8L,
   continuation <- data.frame(week = numeric(), patient = integer(),
                               cycle = integer(), decision = character())
   stopped <- FALSE
+  global_start_week <- NA_real_
+  stop_event <- list(cycle=NA_integer_,x=NA_integer_,n=NA_integer_,risk=NA_real_)
   counts <- dose_cycle_counts(observed, settings$n_dose, n_cycle)
 
   # Each epoch: observe ALL outcomes due now, update counts/safety, then
@@ -135,9 +138,30 @@ run_basyc <- function(outcomes, cohort_size = 3L, cycle_weeks = 8L,
       }
       observed <- rbind(observed, new)
       counts <- dose_cycle_counts(observed, settings$n_dose, n_cycle)
-      safety <- update_safety(counts, excluded, settings)
+    }
+
+    # Experimental mode starts BOTH global termination and permanent exclusion
+    # after cohort 1 completes every cycle. DCR remains active independently.
+    first_sequence_complete <- sum(observed$cohort==1 & observed$cycle==n_cycle)==cohort_size
+    global_ready <- global_monitor=="continuous" || first_sequence_complete
+    more_treatment <- any(due$cycle<n_cycle) || epoch+1L<=n_cohort
+    if (nrow(due) && global_ready) {
+      if (is.na(global_start_week)) global_start_week <- week
+      safety <- update_safety(counts,excluded,settings)
       excluded <- safety$excluded
-      stopped <- safety$stop_trial
+      # In the experimental mode, a terminal visit cannot be an EARLY stop.
+      # Its safety data still inform exclusion and the final MTS screen.
+      stopped <- safety$stop_trial && (global_monitor=="continuous" || more_treatment)
+      if (stopped) {
+        j_stop <- unname(which(counts$n[1,]>=settings$safety_min_n &
+                          safety$risk[1,]>settings$xi)[1])
+        stop_event <- list(cycle=j_stop,x=counts$x[1,j_stop],n=counts$n[1,j_stop],
+                           risk=safety$risk[1,j_stop])
+      }
+    }
+    allocation_decision <- if (global_ready) decision_fun else function(x,n,s) {
+      action <- decision_fun(x,n,s)
+      if (action=="DU") "D" else action  # Exclusion has not started yet.
     }
 
     # Continue previously enrolled patients, subject to DCR and safety.
@@ -162,7 +186,7 @@ run_basyc <- function(outcomes, cohort_size = 3L, cycle_weeks = 8L,
           if (!nrow(prev)) stop("Previous cohort has not completed the next cycle.")
           current_tox <- new$tox[new$patient == row$patient & new$cycle == j]
           z <- dar2(row$dose, current_tox, j, prev$dose,
-                    counts, excluded, settings, decision_fun)
+                    counts, excluded, settings, allocation_decision)
         }
         if (is.na(z$dose)) stop("No available next-cycle dose after safety checks.")
         assignments <- rbind(assignments,
@@ -183,7 +207,7 @@ run_basyc <- function(outcomes, cohort_size = 3L, cycle_weeks = 8L,
       } else {
         last <- due[due$cohort == k - 1 & due$cycle == 1, ]
         stopifnot(length(unique(last$dose)) == 1)
-        z <- dar1(last$dose[1], counts, excluded, settings, decision_fun)
+        z <- dar1(last$dose[1], counts, excluded, settings, allocation_decision)
       }
       if (is.na(z$dose)) stop("No available cycle-1 dose after safety checks.")
       ids <- which(cohort == k)
@@ -194,12 +218,14 @@ run_basyc <- function(outcomes, cohort_size = 3L, cycle_weeks = 8L,
                    i1 = z$i1, i2 = z$i2, current = z$current, previous = z$previous))
     }
     snapshots[[as.character(week)]] <- list(x = counts$x, n = counts$n,
-                                            excluded = excluded)
+                                            excluded = excluded,global_active=global_ready)
     if (stopped) break
   }
   rownames(assignments) <- rownames(observed) <- rownames(continuation) <- NULL
   list(assignments = assignments, observed = observed, counts = counts,
        continuation = continuation, snapshots = snapshots, stopped = stopped,
        end_week = week, settings = settings, n_cycle = n_cycle,
-       n_patient = n_patient, cohort_size = cohort_size)
+       n_patient = n_patient, cohort_size = cohort_size,
+       global_monitor=global_monitor,global_start_week=global_start_week,
+       stop_event=stop_event)
 }

@@ -36,12 +36,13 @@ lyu_true_mts <- function(p, target = .30, ei = c(.25, .35)) {
 # assumption; the paper does not provide a complete longitudinal generator.
 simulate_table3 <- function(nsim = 10000L, cores = 32L, seed = 2018L,
                             weights = "equal", nearest_tie = "higher",
-                            safety_min_n = 3L, scenarios = 1:6,
-                            mts_screen_min_n = 0L, no_mts_fallback = "restricted_revote") {
+                            safety_min_n = 4L, scenarios = 1:6,
+                            mts_screen_min_n = 0L, no_mts_fallback = "restricted_revote",
+                            global_monitor = "after_first_sequence") {
   start_time <- proc.time()[["elapsed"]]
   stopifnot(length(nsim) == 1, nsim >= 1, nsim <= 100000, nsim %% 1 == 0,
             length(seed) == 1, seed >= 1, seed <= .Machine$integer.max - 700000,
-            seed %% 1 == 0, safety_min_n %in% c(0, 3), mts_screen_min_n %in% c(0, 3),
+            seed %% 1 == 0, safety_min_n %in% c(0, 3, 4), mts_screen_min_n %in% c(0, 3),
             length(cores) == 1, cores >= 1, cores %% 1 == 0,
             length(scenarios) > 0, all(scenarios %in% 1:6), !anyDuplicated(scenarios))
   # Never use more cores than Slurm allocated to this R process.
@@ -49,13 +50,14 @@ simulate_table3 <- function(nsim = 10000L, cores = 32L, seed = 2018L,
   cores <- min(as.integer(cores), allocated, length(scenarios) * nsim)
   if (.Platform$OS.type == "windows") cores <- 1L
   weights <- match.arg(weights, c("equal", "patient_cycles"))
-  # Restore the original PAVA ordering and nearest-target tie convention.
-  # The fallback changes only a missing final recommendation; see select_mts().
+  # Restore original PAVA position ties. Keep the existing fallback.
   nearest_tie <- match.arg(nearest_tie, c("lower", "higher"))
   no_mts_fallback <- match.arg(no_mts_fallback, c("restricted_revote", "none"))
+  global_monitor <- match.arg(global_monitor,c("continuous","after_first_sequence"))
   truth <- lyu_scenarios()
   target_mts <- vapply(truth, lyu_true_mts, character(1))
-  # Intratrial override: n >= 3 reproduces the printed Figure 2 decisions.
+  # Strict intratrial n > 3 is implemented as minimum n=4 in the shared
+  # safety checks (global stop, DCR and permanent dose exclusion).
   # The final MTS posterior screen retains the appendix's unqualified rule
   # (minimum n=0). Keep these choices separate rather than changing both.
   settings <- basyc_settings(safety_min_n = safety_min_n)
@@ -74,7 +76,8 @@ simulate_table3 <- function(nsim = 10000L, cores = 32L, seed = 2018L,
       trial_seed <- as.integer(seed + (s - 1L) * 100000L + b)
       set.seed(trial_seed)
       uniforms <- matrix(runif(15L * 3L), nrow = 15L)
-      fit <- run_basyc(uniforms, settings = settings, toxicity_prob = truth[[s]])
+      fit <- run_basyc(uniforms, settings = settings, toxicity_prob = truth[[s]],
+                        global_monitor=global_monitor)
       mts <- select_mts(fit, weights = weights, nearest_tie = nearest_tie,
                          screen_min_n = mts_screen_min_n,
                          no_mts_fallback = no_mts_fallback)
@@ -86,7 +89,9 @@ simulate_table3 <- function(nsim = 10000L, cores = 32L, seed = 2018L,
         stopped_early = fit$stopped, fallback_used = mts$fallback_used,
         n_enrolled = length(unique(fit$assignments$patient)),
         n_complete = sum(tabulate(o$patient, nbins = 15L) == 3L),
-        patient_cycles = nrow(o), dlts = sum(o$tox), end_week = fit$end_week)
+        patient_cycles = nrow(o), dlts = sum(o$tox), end_week = fit$end_week,
+        global_start_week=fit$global_start_week,stop_cycle=fit$stop_event$cycle,
+        stop_x=fit$stop_event$x,stop_n=fit$stop_event$n,stop_risk=fit$stop_event$risk)
       z <- expand.grid(dose = 1:3, cycle = 1:3)
       z$scenario <- s
       z$trial <- b
@@ -130,9 +135,12 @@ simulate_table3 <- function(nsim = 10000L, cores = 32L, seed = 2018L,
   run_settings <- data.frame(
     setting = c("nsim_per_scenario", "scenarios", "cores", "seed", "maximum_patients", "cohort_size",
                 "cycles", "target", "EI", "xi", "safety_min_n", "mts_screen_min_n", "pava_weights",
-                "nearest_tie", "clinical_ties", "no_mts_fallback", "outcome_generator", "probability_cap", "R_version", "created_utc", "host"),
+                "nearest_tie", "clinical_ties", "no_mts_fallback", "global_monitor",
+                "global_exclusion_start", "global_evaluation", "outcome_generator", "probability_cap", "R_version", "created_utc", "host"),
     value = c(nsim, paste(scenarios, collapse = ","), cores, seed, 15, 3, 3, .30, "(0.25,0.35)", .95, safety_min_n, mts_screen_min_n,
-              weights, nearest_tie, FALSE, no_mts_fallback, "independent patient/cycle Bernoulli", "pmin(p,1)",
+              weights, nearest_tie, FALSE, no_mts_fallback,global_monitor,global_monitor,
+              if(global_monitor=="continuous")"all assessments" else "before further treatment",
+              "independent patient/cycle Bernoulli", "pmin(p,1)",
               R.version.string, format(Sys.time(), tz = "UTC", usetz = TRUE),
               Sys.info()[["nodename"]]))
   result <- list(trials = combine("trials"), cells = combine("cells"),

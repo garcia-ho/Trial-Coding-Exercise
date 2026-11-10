@@ -47,6 +47,7 @@ mtpi2_scores <- function(x, n, settings = basyc_settings()) {
 # Return E=escalate, S=stay, D=de-escalate, DU=de-escalate and exclude.
 # The appendix gives NO minimum n for its posterior safety rule (default 0).
 # Set safety_min_n=3 ONLY to reproduce Figure 2's small-sample convention.
+# The current simulation passes 4: strict n > 3, a separate hypothesis.
 mtpi2_decision <- function(x, n, settings = basyc_settings()) {
   risk <- overdose_probability(x, n, settings$target)
   if (n >= settings$safety_min_n && risk > settings$xi) return("DU")

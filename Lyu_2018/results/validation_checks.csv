@@ -21,7 +21,7 @@
 "PAVA rechecks larger blocks after a merge",TRUE
 "MTS considers 2! x 3! = 12 possible intensity-respecting orders",TRUE
 "Explicit within-order tie conventions expose different MTS outputs",TRUE
-"The restored PAVA rule retains Table 2 MTS 221 without using the fallback",TRUE
+"The legacy higher-position option gives Table 2 MTS 221 without a fallback",TRUE
 "Original within-order PAVA ties give one vote each to 211 and 121",TRUE
 "The no-MTS fixture has only the increasing primary winner 212",TRUE
 "Restricted revoting selects safe observed 211, closest within the nonincreasing set",TRUE
@@ -29,3 +29,15 @@
 "The fallback never overrides early stopping",TRUE
 "The fallback never rescues excluded sequences",TRUE
 "No MTS remains when no observed safe nonincreasing sequence exists",TRUE
+"Strict n>3 preserves every Table 2 allocation, outcome, continuation and week-56 finish",TRUE
+"Strict n>3 defers DU at 3/3 and applies it at 4/4",TRUE
+"The same strict minimum governs DCR, global stopping and exclusion",TRUE
+"Delayed global monitoring preserves all Table 2 assignments, outcomes and decisions",TRUE
+"Global safety starts at the first cohort's complete sequence, week 24",TRUE
+"The current Table 2 illustration selects 221 without a fallback",TRUE
+"The timing fixture stops at week 16 under continuous monitoring",TRUE
+"The delayed mode uses updated week-24 data and completes the timing fixture",TRUE
+"Permanent exclusion waits with global stopping; DCR operates before activation",TRUE
+"Persistent unsafe data stop the trial at activation before further allocation",TRUE
+"A final-visit safety crossing is not labelled early termination in the experimental mode",TRUE
+"Final unsafe data still exclude all C3 doses and give no MTS, without a fallback rescue",TRUE

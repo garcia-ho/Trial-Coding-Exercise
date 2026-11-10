@@ -6,6 +6,8 @@
 .Rproj.user/
 .DS_Store
 
+data
+
 # Project-local package library
 renv/library/
 renv/staging/

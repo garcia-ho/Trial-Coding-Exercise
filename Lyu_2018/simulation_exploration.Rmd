@@ -1,0 +1,687 @@
+---
+title: "Lyu 2018: allocation, scenario performance and dependence stress tests"
+date: "2026-11-09"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: true
+    toc_depth: 2
+    number_sections: true
+    theme: flatly
+    highlight: textmate
+    self_contained: true
+---
+
+<style>
+body { font-size:16px; line-height:1.55; padding-top:55px; }
+h1,h2,h3 { color:#194861; }
+.main-container { max-width:1320px; }
+table { margin-top:14px; margin-bottom:24px; }
+pre { font-size:13px; }
+#toc-toggle { position:fixed; top:12px; left:16px; z-index:1050; }
+#TOC { top:60px; }
+body.navigation-collapsed .toc-sidebar,
+body.navigation-collapsed #TOC { display:none !important; }
+body.navigation-collapsed .toc-content { width:100%; float:none; }
+@media print { #toc-toggle,.toc-sidebar {display:none;} .toc-content {width:100%;} }
+</style>
+<button type="button" id="toc-toggle" class="btn btn-default btn-sm"
+ aria-expanded="true">Hide navigation</button>
+<script>
+document.addEventListener("DOMContentLoaded",function(){
+ var b=document.getElementById("toc-toggle"),t=document.getElementById("TOC");
+ if(!b||!t)return;t.parentElement.classList.add("toc-sidebar");
+ b.onclick=function(){var h=document.body.classList.toggle("navigation-collapsed");
+ b.textContent=h?"Show navigation":"Hide navigation";
+ b.setAttribute("aria-expanded",String(!h));window.dispatchEvent(new Event("resize"));};
+});
+</script>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=TRUE, error=FALSE, cache=FALSE,
+                      fig.align="center", dpi=150, dev.args=list(pointsize=14))
+# This notebook ONLY reads the saved RDS. It does not source or call a trial
+# simulator, generate outcomes, fit a new design, or replace any saved data.
+lyu_dir <- if(file.exists("data/table3.rds")) "." else "Lyu_2018"
+saved <- readRDS(file.path(lyu_dir,"data","table3.rds"))
+trials <- saved$trials
+cells <- saved$cells
+completed <- saved$paths
+scenarios <- sort(unique(trials$scenario))
+get_setting <- function(key) saved$settings$value[saved$settings$setting==key]
+N <- as.integer(get_setting("maximum_patients"))
+J <- as.integer(get_setting("cycles"))
+target <- as.numeric(get_setting("target"))
+ei <- as.numeric(strsplit(gsub("[()]","",get_setting("EI")),",")[[1]])
+I <- max(saved$truth$dose)
+nsim <- as.integer(get_setting("nsim_per_scenario"))
+stopifnot(identical(scenarios,1:6),N==15,J==3,I==3,
+          all(table(trials$scenario)==nsim),nrow(trials)==length(scenarios)*nsim,
+          nrow(cells)==nrow(trials)*I*J,
+          sum(cells$n)==sum(trials$patient_cycles),
+          sum(cells$dlts)==sum(trials$dlts),nrow(completed)==sum(trials$n_complete))
+percent <- function(x,digits=2) sprintf(paste0("%.",digits,"f%%"),100*x)
+short_sequence <- function(x) gsub(",","",x,fixed=TRUE)
+colors <- c(D1="#276FBF",D2="#27885E",D3="#8955B8",missing="#DDE2E6",
+            correct="#D5A021",safe="#276FBF",unsafe="#CE4B4B",none="#B9C2C9")
+
+# Reconstruct true probabilities from the SAVED run, rather than current
+# simulation defaults. This keeps the analysis attached to its actual input.
+truth <- lapply(scenarios,function(s) {
+  a <- subset(saved$truth,scenario==s)
+  a <- a[order(a$cycle,a$dose),]
+  matrix(a$p,nrow=I,ncol=J)
+})
+names(truth) <- scenarios
+true_mts <- vapply(scenarios,function(s) {
+  a<-unique(trials$true_mts[trials$scenario==s]);stopifnot(length(a)==1);a
+},character(1))
+
+# All 27 fixed sequences; the design's final recommendations are nonincreasing.
+doses <- as.matrix(expand.grid(rep(list(seq_len(I)),J)))
+keys <- apply(doses,1,paste,collapse=",")
+nonincreasing <- apply(doses,1,function(d)all(diff(d)<=0))
+ordered <- order(rowSums(doses),doses[,1],doses[,2],doses[,3])
+candidate_keys <- keys[ordered[nonincreasing[ordered]]]
+sequence_truth <- do.call(rbind,lapply(scenarios,function(s) {
+  p <- truth[[as.character(s)]]
+  data.frame(scenario=s,sequence=keys,
+    q=apply(doses,1,function(d)mean(p[cbind(d,1:J)])),
+    safe=apply(doses,1,function(d)all(p[cbind(d,1:J)]<ei[2])),
+    nonincreasing=nonincreasing,intensity=rowSums(doses))
+}))
+sequence_id <- paste(sequence_truth$scenario,sequence_truth$sequence,sep="/")
+selected_id <- match(paste(trials$scenario,trials$selected_mts,sep="/"),sequence_id)
+trials$recommend_safe <- FALSE
+has_recommendation <- !is.na(selected_id)
+trials$recommend_safe[has_recommendation] <- sequence_truth$safe[selected_id[has_recommendation]]
+trials$recommend_unsafe <- trials$selected_mts!="None" & !trials$recommend_safe
+trials$correct_safe <- trials$correct_selection & trials$true_mts!="None"
+stopifnot(all(trials$selected_mts %in% c(candidate_keys,"None")))
+cells$true_p <- vapply(seq_len(nrow(cells)),function(r) {
+  truth[[as.character(cells$scenario[r])]][cells$dose[r],cells$cycle[r]]
+},numeric(1))
+cells$unsafe <- cells$true_p>=ei[2]
+
+# Separate seeing the true sequence from choosing it once it has been seen.
+# Completed-path records contain one row per completing patient, not per trial.
+overview <- do.call(rbind,lapply(scenarios,function(s) {
+  a <- subset(trials,scenario==s)
+  p <- subset(completed,scenario==s)
+  target_path <- true_mts[match(s,scenarios)]
+  seen <- a$trial %in% p$trial[p$sequence==target_path]
+  c <- subset(cells,scenario==s)
+  qstar <- subset(sequence_truth,scenario==s & sequence==target_path)$q
+  data.frame(scenario=s,true_mts=target_path,
+    qstar=if(length(qstar))qstar else NA_real_,
+    exact=mean(a$correct_selection),safe=mean(a$recommend_safe),
+    unsafe=mean(a$recommend_unsafe),none=mean(a$selected_mts=="None"),
+    stopped=mean(a$stopped_early),
+    no_mts_without_stop=mean(a$selected_mts=="None" & !a$stopped_early),
+    coverage=if(target_path=="None")NA_real_ else mean(seen),
+    conditional_selection=if(any(seen))mean(a$correct_selection[seen]) else NA_real_,
+    mean_true_path_patients=if(target_path=="None")NA_real_ else sum(p$sequence==target_path)/nrow(a),
+    unsafe_exposure=sum(c$n[c$unsafe])/sum(c$n),
+    mean_enrolled=mean(a$n_enrolled),mean_complete=mean(a$n_complete),
+    mean_dlts=mean(a$dlts),mean_cycles=mean(a$patient_cycles))
+}))
+stopifnot(all(abs(overview$safe+overview$unsafe+overview$none-1)<1e-12))
+with_oracle <- overview$true_mts!="None"
+stopifnot(all(abs(overview$exact[with_oracle] -
+  overview$coverage[with_oracle]*overview$conditional_selection[with_oracle])<1e-12))
+stat <- function(s,name) overview[overview$scenario==s,name]
+mean_cells <- aggregate(n~scenario+dose+cycle,cells,mean)
+selection <- do.call(rbind,lapply(scenarios,function(s) {
+  a <- subset(trials,scenario==s)
+  labs <- c(candidate_keys,"None")
+  data.frame(scenario=s,sequence=labs,
+              probability=as.integer(table(factor(a$selected_mts,levels=labs)))/nrow(a))
+}))
+```
+
+# What this exploration measures
+
+We take the **current coded design as the fixed BaSyc benchmark**. This report
+explores the saved `data/table3.rds`: `r nsim` trials in each of six scenarios,
+`r nrow(trials)` trials total. It does not compare runs or try to match the
+paper's numerical results. The copula section is a proposal only.
+
+The saved run uses **strict n > 3** for intratrial safety and starts global
+termination and exclusion after the first cohort completes its sequence.
+Equal PAVA weights, higher-position nearest-target ties and the existing
+restricted-revote fallback are retained. These recorded settings define this
+benchmark throughout the exploration.
+
+```{r recorded-settings}
+show <- c("nsim_per_scenario","maximum_patients","cohort_size","cycles","target",
+          "EI","safety_min_n","mts_screen_min_n","global_monitor",
+          "pava_weights","nearest_tie","no_mts_fallback","outcome_generator","seed")
+knitr::kable(saved$settings[match(show,saved$settings$setting),],row.names=FALSE,
+             caption="Settings recorded in the input RDS")
+```
+
+Use three distinct questions to judge performance:
+
+1. **Recommendation:** does the design choose the true MTS, another safe path,
+   an unsafe path, or no path?
+2. **Exploration:** does a patient ever complete the true MTS, so it can enter
+   the final sequence-specific analysis?
+3. **Patient allocation:** how much treatment is delivered in truly unsafe
+   dose/cycle cells, and how many patients reach later cycles?
+
+Here, a truly safe sequence has every cycle probability **below 0.35**, the
+simulation's truth convention. This differs from the posterior safety event
+used by the design, which compares an unknown cell probability with 0.30.
+Exact-MTS selection is a stricter metric than selecting any safe sequence.
+For S4 there is no safe sequence: **no recommendation is the correct decision**.
+With 10,000 trials, the Monte Carlo standard error of an unconditional
+probability is at most 0.5 percentage points. Conditional selection uses only
+trials observing the true path and has a smaller effective denominator.
+
+```{r operating-characteristics}
+tab <- data.frame(Scenario=paste0("S",overview$scenario),
+  True_MTS=short_sequence(overview$true_mts),
+  Correct_decision_pct=100*overview$exact,
+  Safe_recommendation_pct=100*overview$safe,
+  Unsafe_recommendation_pct=100*overview$unsafe,
+  No_MTS_pct=100*overview$none,Early_stop_pct=100*overview$stopped)
+knitr::kable(tab,digits=2,row.names=FALSE,
+  col.names=c("Scenario","True MTS","Correct decision (%)","Safe rec. (%)",
+              "Unsafe rec. (%)","No MTS (%)","Early stop (%)"))
+```
+
+```{r recommendation-composition, fig.width=12, fig.height=5.3, fig.cap='Final recommendation categories, across all saved trials. In S4, the gray no-MTS category is the correct decision; the gold category refers only to a true safe MTS.'}
+parts <- rbind(overview$exact,overview$safe-overview$exact,overview$unsafe,overview$none)
+# S4 has no safe MTS: put all its correct decisions in the no-MTS category.
+parts[1,overview$true_mts=="None"] <- 0
+parts[2,overview$true_mts=="None"] <- 0
+par(mar=c(4,4,3,1))
+at <- barplot(100*parts,col=colors[c("correct","safe","unsafe","none")],
+                border=NA,names.arg=paste0("S",scenarios),ylim=c(0,122),yaxt="n",
+                ylab="Trials (%)",main="Final recommendations across the six scenarios")
+axis(2,at=seq(0,100,20))
+legend("top",c("True safe MTS","Other safe sequence","Unsafe sequence","No MTS"),
+       fill=colors[c("correct","safe","unsafe","none")],ncol=2,bty="n",cex=.9)
+for(s in seq_along(scenarios)) {
+  centers <- cumsum(100*parts[,s])-50*parts[,s]
+  show <- parts[,s]>=.075
+  text(at[s],centers[show],sprintf("%.1f",100*parts[show,s]),cex=.9,
+       col=ifelse(which(show)==4,"#253746","white"),font=2)
+}
+```
+
+# Why the true scenarios differ
+
+For a fixed three-cycle sequence, the truth criterion is
+
+$$
+q_s=\frac{p_{s_1,1}+p_{s_2,2}+p_{s_3,3}}{3},
+\qquad \max_j p_{s_j,j}<0.35.
+$$
+
+The following plot shows all ten nonincreasing sequences. A TPC near 0.30
+does not make a sequence safe when one cycle is overly toxic. Gold marks the
+true MTS; red marks a sequence containing an unsafe cycle. The shaded region
+is the EI, (0.25, 0.35).
+
+```{r true-sequence-spectrum, fig.width=14, fig.height=9, fig.cap='True sequence TPC and cellwise safety. Blue and gold points are safe; red points contain an unsafe cycle. Gold identifies the true MTS. S5 and S6 use the highest safe sequence below target because no safe sequence reaches the EI.'}
+op <- par(mfrow=c(2,3),mar=c(4,4.2,3,1),cex=.95)
+for(s in scenarios) {
+  a <- subset(sequence_truth,scenario==s)
+  a <- a[match(candidate_keys,a$sequence),]
+  y <- rev(seq_len(nrow(a)))
+  limit <- min(1,max(.4,a$q)*1.12)
+  plot(NA,xlim=c(0,limit),ylim=c(.4,nrow(a)+.6),xlab="True TPC",
+       ylab="",yaxt="n",main=paste0("S",s," | true ",short_sequence(true_mts[s])))
+  rect(ei[1],0,ei[2],nrow(a)+1,col="#EDF0F2",border=NA)
+  abline(v=target,lty=2,col="#52636F")
+  axis(2,at=y,labels=short_sequence(a$sequence),las=1,cex.axis=.9)
+  is_true <- a$sequence==true_mts[s]
+  points(a$q,y,pch=21,cex=ifelse(is_true,1.7,1.2),
+         bg=ifelse(is_true,colors["correct"],ifelse(a$safe,colors["safe"],colors["unsafe"])))
+}
+par(op)
+```
+
+S1 and S2 have different cycle-specific safety frontiers despite similar
+first-cycle probabilities. In S1, D2/C3 has probability 0.363 and is unsafe;
+the true MTS is 221, with TPC 0.2705. In S2, D2/C3 is safe at 0.3267, making
+222 the true MTS with TPC 0.2979. Its neighboring 221 has TPC **0.2495**,
+just below the lower EI boundary. Small changes in the toxicity surface
+therefore change which complete path the design must explore and recognize.
+
+# Allocation and exposure
+
+These plots use **all evaluated dose/cycle observations**, including those
+from patients who did not finish three cycles and trials that stopped early.
+They do not restrict allocation to patients completing nonincreasing paths.
+
+## How much treatment reaches each cycle?
+
+Each bar represents the `r N` planned patients in a trial. The gray portion
+is the mean number without an evaluable observation in that cycle, combining
+non-enrollment and failure to reach/complete that assessment. Thus later-cycle
+bars retain the loss of follow-up rather than renormalizing the survivors to 100%.
+
+```{r allocation-stacked, fig.width=14, fig.height=8.5, fig.cap='Mean evaluated patients per dose and cycle, per trial. Blue D1, green D2, purple D3; gray NA means no evaluated observation out of 15 planned patients. Numbers within sufficiently large segments identify dose and mean patient count.'}
+op <- par(mfrow=c(2,3),mar=c(4,4,3,1),cex=.95)
+for(s in scenarios) {
+  m <- matrix(0,I,J)
+  a <- subset(mean_cells,scenario==s)
+  m[cbind(a$dose,a$cycle)] <- a$n
+  values <- rbind(m,pmax(0,N-colSums(m)))
+  at <- barplot(values,col=colors[c("D1","D2","D3","missing")],border="white",
+                  names.arg=paste0("Cycle ",1:J),ylim=c(0,N+1),
+                  ylab="Mean evaluated patients",main=paste("Scenario",s))
+  for(j in 1:J) {
+    center <- cumsum(values[,j])-values[,j]/2
+    ok <- values[,j]>=1.1
+    label <- ifelse(values[ok,j]>=2,
+      paste0(c("D1","D2","D3","NA")[ok],"\n",sprintf("%.1f",values[ok,j])),
+      paste0(c("D1","D2","D3","NA")[ok]," ",sprintf("%.1f",values[ok,j])))
+    text(at[j],center[ok],label,cex=.8,
+         col=ifelse(which(ok)==4,"#253746","white"),font=2)
+  }
+}
+par(op)
+```
+
+## Which dose/cycle cells receive patients?
+
+The heatmaps combine mean allocation with true toxicity. A red border marks
+a truly unsafe cell; a gold inner border marks a cycle component of the true MTS.
+Color intensity represents allocation on the same 0-to-15 scale in every panel.
+
+```{r allocation-heatmap, fig.width=14, fig.height=8.5, fig.cap='Allocation heatmaps. Each cell gives mean evaluated patients n and true DLT probability p. Darker blue means more allocation; red borders mean p >= 0.35; gold borders locate the true MTS.'}
+op <- par(mfrow=c(2,3),mar=c(4.5,4.5,3,1),mgp=c(2.8,.8,0),cex=.95)
+palette <- colorRampPalette(c("#F5F9FC","#175C96"))(101)
+for(s in scenarios) {
+  p <- truth[[as.character(s)]]
+  a <- subset(mean_cells,scenario==s)
+  m <- matrix(0,I,J);m[cbind(a$dose,a$cycle)] <- a$n
+  plot(NA,xlim=c(.5,J+.5),ylim=c(.5,I+.5),xlab="Cycle",ylab="Dose",
+       xaxt="n",yaxt="n",main=paste("Scenario",s))
+  axis(1,at=1:J);axis(2,at=1:I,labels=paste0("D",1:I),las=1)
+  for(d in 1:I)for(j in 1:J) {
+    rect(j-.48,d-.48,j+.48,d+.48,
+         col=palette[1+round(100*m[d,j]/N)],border="white")
+    if(p[d,j]>=ei[2])rect(j-.47,d-.47,j+.47,d+.47,border=colors["unsafe"],lwd=2)
+    col <- if(m[d,j]>9)"white" else "#183849"
+    text(j,d+.12,sprintf("n=%.2f",m[d,j]),cex=.9,col=col,font=2)
+    text(j,d-.15,sprintf("p=%.3f",p[d,j]),cex=.85,col=col)
+  }
+  if(true_mts[s]!="None") {
+    d <- as.integer(strsplit(true_mts[s],",",fixed=TRUE)[[1]])
+    for(j in 1:J)rect(j-.40,d[j]-.40,j+.40,d[j]+.40,border=colors["correct"],lwd=3)
+  }
+}
+par(op)
+```
+
+Define unsafe evaluated exposure using the truth, not the posterior decision:
+
+$$
+\text{Unsafe exposure}
+=\frac{\sum_{b,d,j}n_{bdj}\,\mathbf1\{p_{dj}\ge0.35\}}
+       {\sum_{b,d,j}n_{bdj}}.
+$$
+
+This is a patient-cycle proportion, not the percentage of distinct patients
+ever receiving an unsafe dose. Multiple DLTs in one patient also contribute
+multiple events to the mean DLT count.
+
+```{r burden-table}
+tab <- data.frame(Scenario=paste0("S",scenarios),
+  Mean_enrolled=overview$mean_enrolled,Mean_complete=overview$mean_complete,
+  Mean_evaluated_cycles=overview$mean_cycles,Mean_DLTs=overview$mean_dlts,
+  Unsafe_exposure_pct=100*overview$unsafe_exposure)
+knitr::kable(tab,digits=2,row.names=FALSE,
+  col.names=c("Scenario","Mean enrolled","Mean completed","Mean evaluated cycles",
+              "Mean DLTs","Unsafe exposure (%)"))
+```
+
+## How do doses move within patients?
+
+The following diagram uses completed patient paths. Arrow width is
+proportional to the mean number of patients following that transition per
+trial; red arrows escalate, blue arrows de-escalate, and gray arrows stay.
+Node labels give the mean number of completing patients at that dose/cycle.
+This describes **completers only**; the preceding allocation plots include
+all evaluated observations and should be used to assess exposure.
+
+```{r allocation-transitions, fig.width=14, fig.height=8.5, fig.cap='Dose transitions among patients completing all three cycles. Nodes show mean completers per trial; widths show mean transition counts. Red means escalation, blue de-escalation and gray no change. Increasing paths are allowed during exploration even though the final recommendation is nonincreasing.'}
+op <- par(mfrow=c(2,3),mar=c(4.5,4.5,3,1),mgp=c(2.8,.8,0),cex=.95)
+for(s in scenarios) {
+  a <- subset(completed,scenario==s)
+  d <- do.call(rbind,strsplit(a$sequence,",",fixed=TRUE));storage.mode(d)<-"integer"
+  plot(NA,xlim=c(.6,J+.4),ylim=c(.5,I+.5),xlab="Cycle",ylab="Dose",
+       xaxt="n",yaxt="n",main=paste("Scenario",s))
+  axis(1,at=1:J);axis(2,at=1:I,labels=paste0("D",1:I),las=1)
+  for(j in 1:(J-1)) {
+    flow <- table(factor(d[,j],levels=1:I),factor(d[,j+1],levels=1:I))/nsim
+    for(from in 1:I)for(to in 1:I)if(flow[from,to]>.025) {
+      col <- if(to>from)colors["unsafe"] else if(to<from)colors["safe"] else "#A3ADB5"
+      arrows(j+.13,from,j+1-.13,to,col=adjustcolor(col,.75),
+             lwd=.35+1.2*flow[from,to],length=.07,angle=20)
+    }
+  }
+  for(j in 1:J)for(dose in 1:I) {
+    rect(j-.13,dose-.16,j+.13,dose+.16,col="white",border="#4E6575",lwd=1.2)
+    text(j,dose,sprintf("%.1f",sum(d[,j]==dose)/nsim),cex=.85)
+  }
+}
+par(op)
+```
+
+# Exploration versus final selection
+
+Let V be the event that at least one patient completes the true MTS.
+Because final selection is restricted to observed completed sequences,
+
+$$
+\Pr(\widehat s=s^*)
+=\Pr(V)\Pr(\widehat s=s^*\mid V).
+$$
+
+This identity separates a **coverage bottleneck** from selection after the
+sequence has entered the dataset. The conditional quantity is descriptive:
+trials visiting a path need not be comparable with those that do not.
+
+```{r coverage-table}
+tab <- subset(overview,true_mts!="None")
+knitr::kable(data.frame(Scenario=paste0("S",tab$scenario),
+  True_MTS=short_sequence(tab$true_mts),TPC=tab$qstar,
+  Seen_pct=100*tab$coverage,Selected_pct=100*tab$exact,
+  Selected_given_seen_pct=100*tab$conditional_selection,
+  Mean_completers_on_true_MTS=tab$mean_true_path_patients),digits=2,row.names=FALSE,
+  col.names=c("Scenario","True MTS","True TPC","Seen (%)","Selected (%)",
+              "Selected given seen (%)","Mean patients on true MTS"))
+```
+
+```{r exploration-selection, fig.width=13, fig.height=5, fig.cap='True-MTS exploration and final selection. Left: probability of observing the true path at least once and of selecting it. Right: selection conditional on observing it. S4 has no safe MTS and is omitted.'}
+a <- subset(overview,true_mts!="None")
+op <- par(mfrow=c(1,2),mar=c(4,4,3,1))
+at <- barplot(100*rbind(a$coverage,a$exact),beside=TRUE,
+       col=colors[c("safe","correct")],border=NA,
+       names.arg=paste0("S",a$scenario),ylim=c(0,126),yaxt="n",
+       ylab="Trials (%)",main="Did the trial observe the true sequence?")
+axis(2,at=seq(0,100,20))
+legend("top",c("Observed complete path","Selected true MTS"),
+       fill=colors[c("safe","correct")],bty="n",cex=.9)
+text(at[2,],100*a$exact,sprintf("%.1f",100*a$exact),pos=3,cex=.85)
+at <- barplot(100*a$conditional_selection,col=colors["safe"],border=NA,
+       names.arg=paste0("S",a$scenario),ylim=c(0,110),yaxt="n",
+       ylab="Conditional selection (%)",main="If observed, was the true MTS selected?")
+axis(2,at=seq(0,100,20))
+text(at,100*a$conditional_selection,sprintf("%.1f",100*a$conditional_selection),pos=3,cex=.9)
+par(op)
+```
+
+## What each scenario teaches
+
+- **S1: a cycle-specific boundary.** The correct path is 221, with D2
+  permissible in cycles 1 and 2 but unsafe in cycle 3. Coverage is
+  `r percent(stat(1,"coverage"))`, and selection conditional on coverage is
+  `r percent(stat(1,"conditional_selection"))`. Both exploration and final
+  discrimination contribute. A pooled sequence TPC can also look acceptable
+  while containing one unsafe cell.
+- **S2: a rare complete optimal path.** The true 222 is observed in only
+  `r percent(stat(2,"coverage"))` of trials. Conditional selection is
+  `r percent(stat(2,"conditional_selection"))`, giving overall exact selection
+  `r percent(stat(2,"exact"))`. Personal de-escalation and conservative
+  cross-cycle allocation split patients onto other paths. The low exact
+  selection rate therefore cannot be diagnosed from final PAVA alone.
+- **S3: safe exploration is too slow to reach the upper boundary.** All dose/cycle
+  cells are safe. The true 333 is observed in only `r percent(stat(3,"coverage"))`
+  of trials, but selected in `r percent(stat(3,"conditional_selection"))` of
+  trials observing it. With only five cohorts, an initial D1 cohort and
+  conservative cross-cycle movement, this is predominantly a coverage limitation.
+  Selecting 332 is underdosing relative to the exact oracle, not a toxicity failure.
+- **S4: recognition and burden must both be measured.** There is no safe
+  sequence. No MTS is returned in `r percent(stat(4,"none"))` of trials and
+  global early termination occurs in `r percent(stat(4,"stopped"))`.
+  The difference is no recommendation without a global early-stop flag.
+  Nonetheless, mean exposure is `r sprintf("%.2f",stat(4,"mean_cycles"))`
+  evaluated patient-cycles and `r sprintf("%.2f",stat(4,"mean_dlts"))` DLTs.
+  Global monitoring begins after the first complete cohort sequence in this
+  benchmark, so a high eventual stopping probability alone does not imply low burden.
+- **S5: a large toxicity jump helps define the safe boundary.** D2 is safe,
+  while D3 starts at 0.58. The true 222 has TPC 0.1765: no safe path reaches
+  the EI, so the highest safe sequence below target is the oracle. Coverage is
+  `r percent(stat(5,"coverage"))` and conditional selection is
+  `r percent(stat(5,"conditional_selection"))`. This gives a clearer flat
+  boundary than S1/S2, although unsafe recommendations still occur in
+  `r percent(stat(5,"unsafe"))` of trials.
+- **S6: the starting sequence is already optimal.** Only D1 is safe.
+  The true 111 is always observed, so coverage is not the limitation.
+  Exact and safe recommendation probabilities both equal
+  `r percent(stat(6,"exact"))`. Unsafe alternatives such as 211 can have
+  a TPC near target despite an unsafe first cycle. Moreover,
+  `r percent(stat(6,"unsafe_exposure"))` of evaluated exposure is unsafe:
+  its relatively high exact-selection probability should not obscure this burden.
+
+These explanations combine the known truth geometry and observed allocations.
+They are diagnostic interpretations, not causal effects established by
+changing one design component at a time.
+
+```{r final-selection-spectrum, fig.width=14, fig.height=10, fig.cap='Final selection by sequence. Gold is the true safe MTS, blue other safe sequences, red unsafe sequences, gray no MTS. Axes are percentages and panel limits vary to keep small probabilities readable; S4 no MTS is correct.'}
+op <- par(mfrow=c(2,3),mar=c(4,4.2,3,1),cex=.95)
+for(s in scenarios) {
+  a <- subset(selection,scenario==s)
+  q <- subset(sequence_truth,scenario==s)
+  safe <- q$safe[match(a$sequence,q$sequence)];safe[is.na(safe)] <- FALSE
+  col <- ifelse(a$sequence=="None",colors["none"],
+           ifelse(a$sequence==true_mts[s],colors["correct"],
+             ifelse(safe,colors["safe"],colors["unsafe"])))
+  y <- rev(seq_len(nrow(a)));value <- 100*a$probability
+  limit <- max(30,1.3*max(value))
+  plot(NA,xlim=c(0,limit),ylim=c(.4,nrow(a)+.6),xaxt="n",yaxt="n",
+       xlab="Trials selecting sequence (%)",ylab="",main=paste("Scenario",s))
+  axis(1,at=seq(0,min(100,limit),by=if(limit<=40)10 else 20))
+  axis(2,at=y,labels=short_sequence(a$sequence),las=1,cex.axis=.85)
+  rect(0,y-.33,value,y+.33,col=col,border=NA)
+  ok <- value>=1
+  text(value[ok],y[ok],sprintf("%.1f",value[ok]),pos=4,cex=.8)
+}
+par(op)
+```
+
+# Cycle trends, association and carryover are different
+
+**The design does not require the multiplier 1.10.** It uses separate
+beta/binomial working models for dose/cycle cells. The 10% increase specifies
+the marginal toxicity truth used in the saved simulation:
+
+$$
+p_{dj}=\min\{1,p_{d1}(1.10)^{j-1}\}.
+$$
+
+The method does, however, use the assumption that toxicity at a fixed dose
+does not decrease across cycles to motivate its **nonincreasing final MTS**.
+A declining or nonmonotone cycle trend would challenge that restriction.
+
+Increasing marginal risks do not imply stochastic dependence. The saved
+generator uses independent patient/cycle outcomes; it can increase the risk
+over cycles while keeping the cycle-specific latent uniforms independent.
+A copula instead changes association while preserving specified margins.
+Pharmacologic carryover is another question: a previous dose changes a later
+toxicity probability. Copula association alone does not introduce that
+history-dependent mean effect.
+
+# Proposed copula stress tests: no implementation or new simulation
+
+## Keep the margins and change only within-patient dependence
+
+For each patient, draw one latent vector, independent across patients:
+
+$$
+(U_{i1},U_{i2},U_{i3})\sim C_\theta,
+\qquad U_{ij}\sim\operatorname{Uniform}(0,1),
+\qquad Y_{ij}(d)=\mathbf1\{U_{ij}\le p_{dj}\}.
+$$
+
+Use the same cycle-specific uniform for all candidate doses in that cycle;
+this gives monotone individual potential outcomes when the dose-specific
+margins increase. Reveal only the outcome at the assigned dose. This defines
+responses under any adaptive dose sequence without looking at future outcomes.
+
+For a fixed sequence s, its marginal TPC remains
+
+$$
+E\left\{\frac13\sum_jY_{ij}(s_j)\right\}
+=\frac13\sum_jp_{s_j,j}=q_s.
+$$
+
+Thus varying the copula alone **does not change the true MTS for our present
+average-TPC/cellwise-safety objective**. It changes clustering, multiple DLTs,
+the information revealed during adaptation and the resulting allocation path.
+
+## One parameter: Gaussian or Clayton
+
+Start with a Gaussian copula with serial correlation:
+
+$$
+Z_i\sim N_3(0,R_\rho),\qquad (R_\rho)_{jk}=\rho^{|j-k|},
+\qquad U_{ij}=\Phi(Z_{ij}).
+$$
+
+The single parameter rho controls persistence across cycles, including when
+different doses are given. Independence is rho=0. This is our proposed simple
+serial benchmark, not a claim that Lyu used a Gaussian copula.
+
+For a family with direct dose-finding precedent, use a three-dimensional
+Clayton copula:
+
+$$
+C_\theta(u_1,u_2,u_3)
+=\left(u_1^{-\theta}+u_2^{-\theta}+u_3^{-\theta}-2\right)^{-1/\theta},
+\qquad \theta>0,
+$$
+
+with independence as theta approaches zero. Small U means toxicity in our
+threshold convention, so Clayton's lower-tail association emphasizes patients
+prone to toxicities in several cycles. Yin and Yuan (2009) use a
+Clayton-inspired model and discuss Gumbel-Hougaard for Bayesian drug-combination
+dose finding. Their drug-combination regression is not itself a generator
+for repeated-cycle outcomes; the construction above is our proposed adaptation.
+
+For a secondary family comparison, use Gumbel-Hougaard, making tail orientation
+explicit: its usual upper tail concerns large U, hence non-DLT outcomes under
+our convention. Its survival version, obtained by replacing every U with 1-U,
+places that tail association on DLTs instead.
+
+Compare families at matched latent pairwise Kendall tau rather than at the
+same numeric parameter:
+
+$$
+\tau_{\rm Gaussian}=\frac{2}{\pi}\arcsin(\rho),\qquad
+\tau_{\rm Clayton}=\frac{\theta}{\theta+2},\qquad
+\tau_{\rm GH}=1-\frac1\theta.
+$$
+
+For the serial Gaussian case these refer to adjacent cycles; lag-two
+association is weaker. In the family comparison, use an **exchangeable Gaussian**
+copula so all three pairwise taus can be matched to the exchangeable Clayton
+and Gumbel-Hougaard copulas. This separates a family effect from a lag-pattern effect.
+Gumbel-Hougaard here denotes the Archimedean family; it should not be confused
+with the different binary Gumbel association model reviewed in Cunanan and
+Koopmeiners (2014).
+
+## Two parameters when association should depend on dose changes
+
+An optional Gaussian potential-outcome extension has a latent value for every
+dose/cycle cell. Set
+
+$$
+\operatorname{Corr}(Z_{i,d,j},Z_{i,d',k})
+=\rho_C^{|j-k|}\rho_D^{|d-d'|},
+\qquad
+Y_{ij}(d)=\mathbf1\{Z_{i,d,j}\le\Phi^{-1}(p_{dj})\}.
+$$
+
+Here rho_C controls cycle persistence; rho_D controls how much association
+persists when the dose changes. The full 9-by-9 correlation matrix is the
+Kronecker product of two AR(1) correlation matrices, ensuring validity for
+all possible dose paths. Parameters between zero and one are sufficient for
+the initial positive-dependence stress tests. The rho_D=1 limit recovers the
+shared-within-cycle construction and requires handling its singular limit.
+
+This extension preserves **marginal** dose monotonicity, but at rho_D<1 it does
+not guarantee monotone binary potential outcomes for every individual.
+That is an additional coupling assumption to choose explicitly. These are
+simulation parameters; the proposal does not ask the N=15 design to estimate
+them from the trial.
+
+## Calibration and the adaptive-selection issue
+
+A latent copula parameter is not the observed binary correlation. For two
+fixed doses/cycles with event probabilities p and q,
+
+$$
+\operatorname{Corr}(Y_1,Y_2)
+=\frac{C_\theta(p,q)-pq}{\sqrt{p(1-p)q(1-q)}}.
+$$
+
+Future generator validation should check margins and dependence on fixed
+sequences before running an adaptive trial. Copulas that differ for continuous
+uniforms can produce similar binary distributions, so report realized fixed-path
+binary associations as well as the latent parameter.
+
+There is also a consequential distinction under intrapatient adaptation:
+
+$$
+\Pr\{Y_{ij}(d)=1\}=p_{dj}
+\quad\text{does not generally imply}\quad
+\Pr\{Y_{ij}=1\mid A_{ij}=d,H_{i,j-1}\}=p_{dj}.
+$$
+
+Earlier toxicity reveals information about the correlated later uniform and
+also changes the next dose. Patients assigned a given cell can therefore be
+selected for susceptibility. Keep the oracle defined under **fixed sequence
+interventions** and measure this enrichment explicitly. Re-drawing an
+independent uniform after each dose decision would remove the intended dependence.
+
+## A staged experiment
+
+| Stage | Proposed change | Held fixed | Question |
+|:--|:--|:--|:--|
+| 1 | Gaussian serial rho = 0, 0.3, 0.6, 0.8 | All six saved marginal surfaces and the coded design | Does serial dependence alter exploration, safety or selection? |
+| 2 | Exchangeable Gaussian, Clayton and Gumbel-Hougaard/survival versions at latent tau = 0, 0.2, 0.4, 0.6 | Margins, design and all three pairwise latent taus | Does the copula family or tail orientation matter? |
+| 3 | Two-parameter Gaussian rho_C/rho_D grid | Margins and design | Are dose changes important to the association effect? |
+| 4 | Flat, stronger-increasing and decreasing cycle trends | A chosen copula setting | Does the nonincreasing-sequence restriction lose an optimal path? |
+
+Start with Stage 1: six scenarios times four dependence settings gives 24
+conditions. Future comparisons should use the same latent patient vectors for
+the benchmark and any improved design. Independence must recover the original
+distributional benchmark. No stage has been implemented or run in this report.
+
+For Stage 4, define both the best nonincreasing sequence and an unrestricted
+best sequence among all 27 paths. This separates estimation failure from the
+cost of excluding increasing recommendations.
+
+Retain exact-MTS selection, safe/unsafe recommendations, path coverage,
+selection given coverage, unsafe exposure, stopping timing and DLT burden.
+Add patient-level probabilities of any DLT and multiple DLTs, plus
+history-stratified empirical toxicity rates at each cell. Those patient-level
+risks can change with the copula even when average TPC and its true MTS stay fixed.
+Changing the objective to a patient-level cumulative-risk target would require
+redefining the oracle for every dependence setting.
+
+# References and interpretation
+
+- [Lyu, Curran and Ji (2018), BaSyc](https://doi.org/10.1200/PO.18.00020):
+  the dose/cycle design, simulation margins and nonincreasing final-sequence rationale.
+- [Yin and Yuan (2009), Bayesian dose finding by copula regression](https://saasresearch.hku.hk/~gyin/materials/2009YinYuanJRSSC.pdf):
+  primary dose-finding precedent for Clayton-inspired and Gumbel-Hougaard
+  constructions. Our repeated-cycle generator is a new use of proper latent
+  copulas, not a direct copy of their concurrent-drug toxicity regression.
+- [Cunanan and Koopmeiners (2014), copula misspecification in Phase I-II trials](https://pmc.ncbi.nlm.nih.gov/articles/PMC4234400/):
+  precedent for separating data-generating association from the fitted working
+  model and examining robustness. Their efficacy/toxicity setting differs from
+  repeated toxicity with adaptive intrapatient dose changes; its robustness
+  findings do not establish robustness of this benchmark.
+
+The proposed copulas belong to the **data generator**. BaSyc remains the same
+working design during the initial stress tests, so no PK/PD model or copula
+parameter estimation is required to carry them out.
