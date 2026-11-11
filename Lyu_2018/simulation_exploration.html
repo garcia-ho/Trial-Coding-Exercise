@@ -10,7 +10,7 @@
 
 
 
-<meta name="date" content="2026-11-09" />
+<meta name="date" content="2026-11-10" />
 
 <title>Lyu 2018: allocation, scenario performance and dependence stress tests</title>
 
@@ -1514,7 +1514,7 @@ div.tocify {
 
 <h1 class="title toc-ignore">Lyu 2018: allocation, scenario performance
 and dependence stress tests</h1>
-<h4 class="date">2026-11-09</h4>
+<h4 class="date">2026-11-10</h4>
 
 </div>
 
@@ -2052,158 +2052,258 @@ correct.
 </div>
 </div>
 </div>
-<div id="cycle-trends-association-and-carryover-are-different" class="section level1" number="5">
-<h1><span class="header-section-number">5</span> Cycle trends,
-association and carryover are different</h1>
-<p><strong>The design does not require the multiplier 1.10.</strong> It
-uses separate beta/binomial working models for dose/cycle cells. The 10%
-increase specifies the marginal toxicity truth used in the saved
-simulation:</p>
-<p><span class="math display">\[
-p_{dj}=\min\{1,p_{d1}(1.10)^{j-1}\}.
-\]</span></p>
-<p>The method does, however, use the assumption that toxicity at a fixed
-dose does not decrease across cycles to motivate its
-<strong>nonincreasing final MTS</strong>. A declining or nonmonotone
-cycle trend would challenge that restriction.</p>
-<p>Increasing marginal risks do not imply stochastic dependence. The
-saved generator uses independent patient/cycle outcomes; it can increase
-the risk over cycles while keeping the cycle-specific latent uniforms
-independent. A copula instead changes association while preserving
-specified margins. Pharmacologic carryover is another question: a
-previous dose changes a later toxicity probability. Copula association
-alone does not introduce that history-dependent mean effect.</p>
+<div id="copula-stress-tests-changing-dependence-between-cycles" class="section level1" number="5">
+<h1><span class="header-section-number">5</span> Copula stress tests:
+changing dependence between cycles</h1>
+<p>This section proposes a future experiment. <strong>We change how a
+patient’s cycle outcomes are generated, while keeping the current coded
+design fixed.</strong> No copula generator or new stress-test simulation
+is run by this notebook.</p>
+<p>We explain one scenario and one patient at a time. The scenario and
+trial replicate labels are omitted from the equations; each patient
+receives a fresh set of random numbers when the experiment is eventually
+run.</p>
+<div id="what-assumption-changes-from-the-original-simulation" class="section level2" number="5.1">
+<h2><span class="header-section-number">5.1</span> What assumption
+changes from the original simulation?</h2>
+<p>Let <span class="math inline">\(p_{dj}\)</span> be the specified DLT
+probability for <strong>dose <span class="math inline">\(d\)</span> in
+cycle <span class="math inline">\(j\)</span></strong>. These are the
+same six dose/cycle probability surfaces used above. In the original
+generator, a patient’s outcome in one cycle gives no information about
+the random number generating that patient’s next outcome. The copula
+proposal replaces that <strong>within-patient independence</strong> with
+positive association.</p>
+<p>Here, independence refers to the <strong>unobserved cycle-specific
+random numbers</strong>. Even in the original adaptive trial, observed
+DLTs need not be independent: an earlier DLT can change the next dose.
+The copula adds association beyond that dose-decision pathway.</p>
+<table>
+<colgroup>
+<col width="33%" />
+<col width="33%" />
+<col width="33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="left">Part of the experiment</th>
+<th align="left">Original generator</th>
+<th align="left">Copula generator</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">Fixed-dose risk <span class="math inline">\(p_{dj}\)</span></td>
+<td align="left">Saved dose/cycle probabilities</td>
+<td align="left">Same probabilities</td>
+</tr>
+<tr class="even">
+<td align="left">Association across one patient’s cycles</td>
+<td align="left">Independent random numbers</td>
+<td align="left">Associated random numbers</td>
+</tr>
+<tr class="odd">
+<td align="left">Association between different patients</td>
+<td align="left">Independent patient vectors</td>
+<td align="left">Independent patient vectors</td>
+</tr>
+<tr class="even">
+<td align="left">Dose monotonicity within a cycle</td>
+<td align="left">Same random number thresholds all candidate doses</td>
+<td align="left">Same construction</td>
+</tr>
+<tr class="odd">
+<td align="left">Allocation, monitoring and recommendation</td>
+<td align="left">Current coded rules</td>
+<td align="left">Same rules</td>
+</tr>
+<tr class="even">
+<td align="left">Fixed-sequence TPC, safety and true MTS</td>
+<td align="left">Determined by the saved <span class="math inline">\(p_{dj}\)</span></td>
+<td align="left">Same marginal definitions and labels</td>
+</tr>
+</tbody>
+</table>
+<p>The design receives observed doses and DLTs. It does not receive a
+copula parameter. Its beta-binomial working calculations and decision
+rules are retained, although their operating characteristics can change
+when the outcome generator changes. In particular, retaining the
+algorithm does not guarantee its working assumptions describe the new
+data exactly.</p>
+<p>Keep the recorded strict <span class="math inline">\(n&gt;3\)</span>
+safety convention, global-monitoring and exclusion timing, equal PAVA
+weights, higher-position ties, final screening and restricted-revote
+fallback. The target remains 0.30, the EI is (0.25, 0.35), and the
+posterior safety cutoff is 0.95. The pending target-dependent PAVA tie
+hypothesis belongs to a later design comparison.</p>
 </div>
-<div id="proposed-copula-stress-tests-no-implementation-or-new-simulation" class="section level1" number="6">
-<h1><span class="header-section-number">6</span> Proposed copula stress
-tests: no implementation or new simulation</h1>
-<div id="keep-the-margins-and-change-only-within-patient-dependence" class="section level2" number="6.1">
-<h2><span class="header-section-number">6.1</span> Keep the margins and
-change only within-patient dependence</h2>
-<p>For each patient, draw one latent vector, independent across
-patients:</p>
+<div id="how-uniform-random-numbers-become-dlt-outcomes" class="section level2" number="5.2">
+<h2><span class="header-section-number">5.2</span> How uniform random
+numbers become DLT outcomes</h2>
+<p>For this patient, let <span class="math inline">\(U_j\)</span> be an
+unobserved random number between zero and one for cycle <span class="math inline">\(j\)</span>. Each <span class="math inline">\(U_j\)</span> is uniformly distributed. If the
+patient were given dose <span class="math inline">\(d\)</span> in that
+cycle, define the potential outcome</p>
 <p><span class="math display">\[
-(U_{i1},U_{i2},U_{i3})\sim C_\theta,
-\qquad U_{ij}\sim\operatorname{Uniform}(0,1),
-\qquad Y_{ij}(d)=\mathbf1\{U_{ij}\le p_{dj}\}.
+Y_{dj}=\mathbf1\{U_j\le p_{dj}\}.
 \]</span></p>
-<p>Use the same cycle-specific uniform for all candidate doses in that
-cycle; this gives monotone individual potential outcomes when the
-dose-specific margins increase. Reveal only the outcome at the assigned
-dose. This defines responses under any adaptive dose sequence without
-looking at future outcomes.</p>
-<p>For a fixed sequence s, its marginal TPC remains</p>
+<p>Here <span class="math inline">\(Y_{dj}=1\)</span> means a DLT and
+<span class="math inline">\(Y_{dj}=0\)</span> means no DLT. For example,
+a dose with risk 0.20 causes a DLT whenever <span class="math inline">\(U_j\le0.20\)</span>. Uniformity gives <span class="math inline">\(\Pr(Y_{dj}=1)=p_{dj}\)</span>.</p>
+<p>Use the same <span class="math inline">\(U_j\)</span> for all
+candidate doses in that cycle. Increasing the dose can then change no
+DLT to DLT, but cannot change DLT to no DLT when <span class="math inline">\(p_{dj}\)</span> increases with dose. This
+threshold coupling is already present in the original generator; it is
+not the new dependence assumption.</p>
+<p>Write <span class="math inline">\(D_j\)</span> for the dose actually
+assigned in cycle <span class="math inline">\(j\)</span>. Only <span class="math inline">\(Y_{D_j,j}\)</span> is revealed, at its scheduled
+assessment. Other potential outcomes and future outcomes stay hidden
+from the trial rules.</p>
+<p>A <strong>copula</strong> describes how the three uniform random
+numbers go together:</p>
 <p><span class="math display">\[
-E\left\{\frac13\sum_jY_{ij}(s_j)\right\}
-=\frac13\sum_jp_{s_j,j}=q_s.
+C(u_1,u_2,u_3)
+=\Pr(U_1\le u_1,\ U_2\le u_2,\ U_3\le u_3).
 \]</span></p>
-<p>Thus varying the copula alone <strong>does not change the true MTS
-for our present average-TPC/cellwise-safety objective</strong>. It
-changes clustering, multiple DLTs, the information revealed during
-adaptation and the resulting allocation path.</p>
+<p>The arguments <span class="math inline">\(u_1,u_2,u_3\)</span> are
+cutoffs, not doses or extra parameters. For any copula, <span class="math inline">\(C(u,1,1)=u\)</span>, and likewise for the other
+cycles. Thus it can change joint probabilities while keeping each
+individual risk fixed. The original independence copula is simply</p>
+<p><span class="math display">\[
+C(u_1,u_2,u_3)=u_1u_2u_3.
+\]</span></p>
+<p>For a fixed sequence <span class="math inline">\((d_1,d_2,d_3)\)</span>, the probability of three
+DLTs is <span class="math inline">\(C(p_{d_1,1},p_{d_2,2},p_{d_3,3})\)</span>. The
+independent generator gives the product of those three risks. The next
+two families replace that product with different patterns of positive
+association.</p>
 </div>
-<div id="one-parameter-gaussian-or-clayton" class="section level2" number="6.2">
-<h2><span class="header-section-number">6.2</span> One parameter:
-Gaussian or Clayton</h2>
-<p>Start with a Gaussian copula with serial correlation:</p>
+<div id="gaussian-copula-a-shared-patient-component-controlled-by-rho" class="section level2" number="5.3">
+<h2><span class="header-section-number">5.3</span> Gaussian copula: a
+shared patient component, controlled by rho</h2>
+<p>The Gaussian copula starts with three correlated normal scores and
+turns them into uniform random numbers. A convenient construction is</p>
 <p><span class="math display">\[
-Z_i\sim N_3(0,R_\rho),\qquad (R_\rho)_{jk}=\rho^{|j-k|},
-\qquad U_{ij}=\Phi(Z_{ij}).
+Z_j=\sqrt{\rho}\,B+\sqrt{1-\rho}\,\varepsilon_j,
+\qquad U_j=\Phi(Z_j),
+\qquad j=1,2,3.
 \]</span></p>
-<p>The single parameter rho controls persistence across cycles,
-including when different doses are given. Independence is rho=0. This is
-our proposed simple serial benchmark, not a claim that Lyu used a
-Gaussian copula.</p>
-<p>For a family with direct dose-finding precedent, use a
-three-dimensional Clayton copula:</p>
+<p>The patient has one shared score <span class="math inline">\(B\)</span>. Each cycle has its own score <span class="math inline">\(\varepsilon_j\)</span>. All four input scores are
+independent standard normals (mean zero, variance one). <span class="math inline">\(\Phi\)</span> is the standard normal cumulative
+distribution function: it converts a normal score into its percentile.
+Consequently, each <span class="math inline">\(U_j\)</span> is
+uniform.</p>
+<p><strong>What does <span class="math inline">\(\rho\)</span>
+mean?</strong> It is the correlation between any two normal scores <span class="math inline">\(Z_j\)</span>, not between the observed binary DLT
+outcomes. It is also the fraction of each score’s variance supplied by
+the shared component. At <span class="math inline">\(\rho=0\)</span>
+there is no shared contribution and the cycles are independent. At <span class="math inline">\(\rho=0.5\)</span>, half the variance is shared and
+half is cycle-specific. As <span class="math inline">\(\rho\)</span>
+approaches one, the three scores increasingly move together.</p>
+<p>A patient with a low shared score tends to have low uniforms in
+several cycles, making repeated DLTs more likely. These scores are
+mathematical simulation devices, not measured biomarkers or PK/PD
+parameters.</p>
+<p>The formal copula CDF is</p>
 <p><span class="math display">\[
-C_\theta(u_1,u_2,u_3)
+C_G(u_1,u_2,u_3;\rho)
+=\Phi_3\!\left(\Phi^{-1}(u_1),\Phi^{-1}(u_2),\Phi^{-1}(u_3);R_\rho\right),
+\]</span></p>
+<p><span class="math display">\[
+R_\rho=\begin{pmatrix}
+1&amp;\rho&amp;\rho\\
+\rho&amp;1&amp;\rho\\
+\rho&amp;\rho&amp;1
+\end{pmatrix}.
+\]</span></p>
+<p>Here <span class="math inline">\(\Phi^{-1}\)</span> converts a
+percentile back to a normal score, and <span class="math inline">\(\Phi_3\)</span> computes the joint probability for
+three normal scores. The matrix says that each score has variance one
+and every cycle pair has correlation <span class="math inline">\(\rho\)</span>. We propose <span class="math inline">\(0\le\rho&lt;1\)</span>: <strong>one parameter for
+all three pairs</strong>, including cycles 1 and 3. There is no separate
+lag parameter.</p>
+</div>
+<div id="clayton-copula-clustering-of-small-uniforms-controlled-by-theta" class="section level2" number="5.4">
+<h2><span class="header-section-number">5.4</span> Clayton copula:
+clustering of small uniforms, controlled by theta</h2>
+<p>For positive association, the three-cycle Clayton copula is</p>
+<p><span class="math display">\[
+C_C(u_1,u_2,u_3;\theta)
 =\left(u_1^{-\theta}+u_2^{-\theta}+u_3^{-\theta}-2\right)^{-1/\theta},
-\qquad \theta&gt;0,
+\qquad \theta&gt;0.
 \]</span></p>
-<p>with independence as theta approaches zero. Small U means toxicity in
-our threshold convention, so Clayton’s lower-tail association emphasizes
-patients prone to toxicities in several cycles. Yin and Yuan (2009) use
-a Clayton-inspired model and discuss Gumbel-Hougaard for Bayesian
-drug-combination dose finding. Their drug-combination regression is not
-itself a generator for repeated-cycle outcomes; the construction above
-is our proposed adaptation.</p>
-<p>For a secondary family comparison, use Gumbel-Hougaard, making tail
-orientation explicit: its usual upper tail concerns large U, hence
-non-DLT outcomes under our convention. Its survival version, obtained by
-replacing every U with 1-U, places that tail association on DLTs
-instead.</p>
-<p>Compare families at matched latent pairwise Kendall tau rather than
-at the same numeric parameter:</p>
+<p><strong>What does <span class="math inline">\(\theta\)</span>
+mean?</strong> It controls the strength of association. Larger values
+give stronger association; independence is the limit as <span class="math inline">\(\theta\)</span> approaches zero. It is not a
+probability or a binary correlation. The same parameter governs all
+cycle pairs.</p>
+<p>The formula preserves the uniform margins. For example,</p>
 <p><span class="math display">\[
-\tau_{\rm Gaussian}=\frac{2}{\pi}\arcsin(\rho),\qquad
-\tau_{\rm Clayton}=\frac{\theta}{\theta+2},\qquad
-\tau_{\rm GH}=1-\frac1\theta.
+C_C(u,1,1;\theta)
+=\left(u^{-\theta}+1+1-2\right)^{-1/\theta}=u.
 \]</span></p>
-<p>For the serial Gaussian case these refer to adjacent cycles; lag-two
-association is weaker. In the family comparison, use an
-<strong>exchangeable Gaussian</strong> copula so all three pairwise taus
-can be matched to the exchangeable Clayton and Gumbel-Hougaard copulas.
-This separates a family effect from a lag-pattern effect.
-Gumbel-Hougaard here denotes the Archimedean family; it should not be
-confused with the different binary Gumbel association model reviewed in
-Cunanan and Koopmeiners (2014).</p>
+<p>The minus two cancels the contributions from the other two cycles
+when their cutoffs are one. At a zero cutoff the joint CDF is zero by
+continuity. At <span class="math inline">\(\theta=0\)</span>, use the
+independent-uniform branch directly rather than substituting zero into a
+formula containing <span class="math inline">\(1/\theta\)</span>.</p>
+<p>One way to generate these uniforms also uses a shared patient
+component:</p>
+<p><span class="math display">\[
+\begin{aligned}
+W&amp;\sim\operatorname{Gamma}(\text{shape}=1/\theta,\text{rate}=1),\\
+E_1,E_2,E_3&amp;\overset{\mathrm{iid}}{\sim}\operatorname{Exp}(\text{rate}=1).
+\end{aligned}
+\]</span></p>
+<p><span class="math display">\[
+U_j=\left(1+\frac{E_j}{W}\right)^{-1/\theta}.
+\]</span></p>
+<p><span class="math inline">\(W\)</span> is a positive random number
+shared by the patient’s cycles; the <span class="math inline">\(E_j\)</span> are independent positive numbers
+giving cycle-specific variation, also independent of <span class="math inline">\(W\)</span>. For a fixed <span class="math inline">\(\theta\)</span>, a small <span class="math inline">\(W\)</span> pushes several uniforms toward zero.
+Since our DLT rule uses small uniforms, this produces clustering of
+toxicities. The gamma and exponential draws are a sampling recipe;
+<strong><span class="math inline">\(\theta\)</span> is still the only
+free dependence parameter</strong>.</p>
+<p>This concentration near jointly small uniforms is called
+<strong>lower-tail dependence</strong>. Gaussian association is
+symmetric between low and high uniform ranks; Clayton emphasizes the low
+end. A Gaussian copula can also produce repeated DLTs at clinical
+thresholds. Neither construction adds a causal effect of the previous
+dose to <span class="math inline">\(p_{dj}\)</span>: statistical
+association between cycles and pharmacologic carryover are different
+assumptions.</p>
 </div>
-<div id="two-parameters-when-association-should-depend-on-dose-changes" class="section level2" number="6.3">
-<h2><span class="header-section-number">6.3</span> Two parameters when
-association should depend on dose changes</h2>
-<p>An optional Gaussian potential-outcome extension has a latent value
-for every dose/cycle cell. Set</p>
+<div id="comparing-the-two-parameters-on-a-common-scale" class="section level2" number="5.5">
+<h2><span class="header-section-number">5.5</span> Comparing the two
+parameters on a common scale</h2>
+<p>A Gaussian <span class="math inline">\(\rho\)</span> of 0.5 and a
+Clayton <span class="math inline">\(\theta\)</span> of 0.5 do not
+represent the same association. We therefore choose <strong>Kendall’s
+tau</strong>, written <span class="math inline">\(\tau\)</span>, first
+and convert it to each family’s parameter.</p>
+<p>To understand tau, compare two independent patients’ uniforms in two
+cycles. Their rankings agree if the patient with the smaller uniform in
+one cycle also has the smaller uniform in the other cycle. Tau is the
+probability of agreeing rankings minus the probability of reversed
+rankings. It is zero at independence for these families and approaches
+one as the ranks move together. It refers to the <strong>unobserved
+uniforms</strong>; <span class="math inline">\(\tau=0.4\)</span> does
+not mean a 40% binary DLT correlation or a 40% chance of repeated
+toxicity.</p>
+<p>The conversions are</p>
 <p><span class="math display">\[
-\operatorname{Corr}(Z_{i,d,j},Z_{i,d&#39;,k})
-=\rho_C^{|j-k|}\rho_D^{|d-d&#39;|},
-\qquad
-Y_{ij}(d)=\mathbf1\{Z_{i,d,j}\le\Phi^{-1}(p_{dj})\}.
+\tau=\frac{2}{\pi}\arcsin(\rho)
+\quad\Longleftrightarrow\quad
+\rho=\sin(\pi\tau/2)
+\qquad\text{(Gaussian)},
 \]</span></p>
-<p>Here rho_C controls cycle persistence; rho_D controls how much
-association persists when the dose changes. The full 9-by-9 correlation
-matrix is the Kronecker product of two AR(1) correlation matrices,
-ensuring validity for all possible dose paths. Parameters between zero
-and one are sufficient for the initial positive-dependence stress tests.
-The rho_D=1 limit recovers the shared-within-cycle construction and
-requires handling its singular limit.</p>
-<p>This extension preserves <strong>marginal</strong> dose monotonicity,
-but at rho_D&lt;1 it does not guarantee monotone binary potential
-outcomes for every individual. That is an additional coupling assumption
-to choose explicitly. These are simulation parameters; the proposal does
-not ask the N=15 design to estimate them from the trial.</p>
-</div>
-<div id="calibration-and-the-adaptive-selection-issue" class="section level2" number="6.4">
-<h2><span class="header-section-number">6.4</span> Calibration and the
-adaptive-selection issue</h2>
-<p>A latent copula parameter is not the observed binary correlation. For
-two fixed doses/cycles with event probabilities p and q,</p>
 <p><span class="math display">\[
-\operatorname{Corr}(Y_1,Y_2)
-=\frac{C_\theta(p,q)-pq}{\sqrt{p(1-p)q(1-q)}}.
+\tau=\frac{\theta}{\theta+2}
+\quad\Longleftrightarrow\quad
+\theta=\frac{2\tau}{1-\tau}
+\qquad\text{(Clayton)}.
 \]</span></p>
-<p>Future generator validation should check margins and dependence on
-fixed sequences before running an adaptive trial. Copulas that differ
-for continuous uniforms can produce similar binary distributions, so
-report realized fixed-path binary associations as well as the latent
-parameter.</p>
-<p>There is also a consequential distinction under intrapatient
-adaptation:</p>
-<p><span class="math display">\[
-\Pr\{Y_{ij}(d)=1\}=p_{dj}
-\quad\text{does not generally imply}\quad
-\Pr\{Y_{ij}=1\mid A_{ij}=d,H_{i,j-1}\}=p_{dj}.
-\]</span></p>
-<p>Earlier toxicity reveals information about the correlated later
-uniform and also changes the next dose. Patients assigned a given cell
-can therefore be selected for susceptibility. Keep the oracle defined
-under <strong>fixed sequence interventions</strong> and measure this
-enrichment explicitly. Re-drawing an independent uniform after each dose
-decision would remove the intended dependence.</p>
-</div>
-<div id="a-staged-experiment" class="section level2" number="6.5">
-<h2><span class="header-section-number">6.5</span> A staged
-experiment</h2>
 <table>
 <colgroup>
 <col width="25%" />
@@ -2213,88 +2313,264 @@ experiment</h2>
 </colgroup>
 <thead>
 <tr class="header">
-<th align="left">Stage</th>
-<th align="left">Proposed change</th>
-<th align="left">Held fixed</th>
-<th align="left">Question</th>
+<th align="right">Chosen latent <span class="math inline">\(\tau\)</span></th>
+<th align="right">Gaussian <span class="math inline">\(\rho\)</span></th>
+<th align="right">Clayton <span class="math inline">\(\theta\)</span></th>
+<th align="left">Meaning in this experiment</th>
 </tr>
 </thead>
 <tbody>
 <tr class="odd">
-<td align="left">1</td>
-<td align="left">Gaussian serial rho = 0, 0.3, 0.6, 0.8</td>
-<td align="left">All six saved marginal surfaces and the coded
-design</td>
-<td align="left">Does serial dependence alter exploration, safety or
-selection?</td>
+<td align="right">0</td>
+<td align="right">0</td>
+<td align="right">0, using the independence branch</td>
+<td align="left">Original independent generator</td>
 </tr>
 <tr class="even">
-<td align="left">2</td>
-<td align="left">Exchangeable Gaussian, Clayton and
-Gumbel-Hougaard/survival versions at latent tau = 0, 0.2, 0.4, 0.6</td>
-<td align="left">Margins, design and all three pairwise latent taus</td>
-<td align="left">Does the copula family or tail orientation matter?</td>
+<td align="right">0.2</td>
+<td align="right">0.3090</td>
+<td align="right">0.5000</td>
+<td align="left">Weaker positive association</td>
 </tr>
 <tr class="odd">
-<td align="left">3</td>
-<td align="left">Two-parameter Gaussian rho_C/rho_D grid</td>
-<td align="left">Margins and design</td>
-<td align="left">Are dose changes important to the association
-effect?</td>
+<td align="right">0.4</td>
+<td align="right">0.5878</td>
+<td align="right">1.3333</td>
+<td align="left">Intermediate positive association</td>
 </tr>
 <tr class="even">
-<td align="left">4</td>
-<td align="left">Flat, stronger-increasing and decreasing cycle
-trends</td>
-<td align="left">A chosen copula setting</td>
-<td align="left">Does the nonincreasing-sequence restriction lose an
-optimal path?</td>
+<td align="right">0.6</td>
+<td align="right">0.8090</td>
+<td align="right">3.0000</td>
+<td align="left">Stronger positive association</td>
 </tr>
 </tbody>
 </table>
-<p>Start with Stage 1: six scenarios times four dependence settings
-gives 24 conditions. Future comparisons should use the same latent
-patient vectors for the benchmark and any improved design. Independence
-must recover the original distributional benchmark. No stage has been
-implemented or run in this report.</p>
-<p>For Stage 4, define both the best nonincreasing sequence and an
-unrestricted best sequence among all 27 paths. This separates estimation
-failure from the cost of excluding increasing recommendations.</p>
-<p>Retain exact-MTS selection, safe/unsafe recommendations, path
-coverage, selection given coverage, unsafe exposure, stopping timing and
-DLT burden. Add patient-level probabilities of any DLT and multiple
-DLTs, plus history-stratified empirical toxicity rates at each cell.
-Those patient-level risks can change with the copula even when average
-TPC and its true MTS stay fixed. Changing the objective to a
-patient-level cumulative-risk target would require redefining the oracle
-for every dependence setting.</p>
+<p>Tau is a way of specifying the same single parameter, not an
+additional parameter to estimate. These settings cover positive
+association only. Matching tau matches rank association for all three
+cycle pairs. It does not match binary DLT correlations, all three-cycle
+probabilities, or the entire joint distribution. A
+Gaussian-versus-Clayton contrast therefore compares distributional
+shapes at matched tau, not a pure tail effect.</p>
+</div>
+<div id="what-stays-fixed-and-what-can-change-for-a-patient" class="section level2" number="5.6">
+<h2><span class="header-section-number">5.6</span> What stays fixed, and
+what can change for a patient?</h2>
+<p>For a fixed sequence <span class="math inline">\((d_1,d_2,d_3)\)</span>, let <span class="math inline">\(K\)</span> be the number of DLTs over its three
+complete cycles. Regardless of the copula,</p>
+<p><span class="math display">\[
+E(K)=p_{d_1,1}+p_{d_2,2}+p_{d_3,3},
+\qquad
+q(d_1,d_2,d_3)=\frac{E(K)}3.
+\]</span></p>
+<p>Thus the mean TPC is unchanged. The saved safety definition still
+requires every cycle risk to be below 0.35, so the marginal true MTS is
+unchanged and S4 still has no safe MTS. The copula changes how DLTs are
+distributed among patients and cycles, including the probabilities of
+any or repeated DLTs. It is not a new definition of the optimal
+sequence.</p>
+<p>For transparent arithmetic only, suppose all three fixed-cycle risks
+are 0.20. With Clayton <span class="math inline">\(\theta=1\)</span>,
+the probability of three DLTs is</p>
+<p><span class="math display">\[
+C_C(0.20,0.20,0.20;1)=\frac1{5+5+5-2}=\frac1{13}.
+\]</span></p>
+<p>The following values are exact calculations, not simulated results or
+an additional planned scenario:</p>
+<table>
+<colgroup>
+<col width="20%" />
+<col width="20%" />
+<col width="20%" />
+<col width="20%" />
+<col width="20%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="left">Generator in this illustration</th>
+<th align="right"><span class="math inline">\(E(K)\)</span></th>
+<th align="right">At least one DLT</th>
+<th align="right">At least two DLTs</th>
+<th align="right">Three DLTs</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">Independent cycles</td>
+<td align="right">0.600</td>
+<td align="right">0.488</td>
+<td align="right">0.104</td>
+<td align="right">0.008</td>
+</tr>
+<tr class="even">
+<td align="left">Clayton, <span class="math inline">\(\theta=1\)</span></td>
+<td align="right">0.600</td>
+<td align="right">0.344</td>
+<td align="right">0.179</td>
+<td align="right">0.077</td>
+</tr>
+</tbody>
+</table>
+<p>The average burden is identical, but the Clayton example has more
+DLT-free patients and more patients with repeated DLTs. For other
+unequal risks, calculate the joint event probabilities rather than
+assuming every multiple-DLT metric changes in the same direction.</p>
+</div>
+<div id="why-can-allocation-performance-change-if-the-rules-stay-the-same" class="section level2" number="5.7">
+<h2><span class="header-section-number">5.7</span> Why can allocation
+performance change if the rules stay the same?</h2>
+<p>The rules do not use a copula parameter, but they <strong>react to
+earlier DLTs</strong>. With positive association, an earlier DLT gives
+information about the patient’s later outcomes even before the next dose
+is chosen.</p>
+<p>Continue the fixed-risk 0.20 example with Clayton <span class="math inline">\(\theta=1\)</span>. The chance of DLT in both
+cycles 1 and 2 is</p>
+<p><span class="math display">\[
+C_C(0.20,0.20,1;1)=\frac19.
+\]</span></p>
+<p>Consequently,</p>
+<p><span class="math display">\[
+\begin{aligned}
+\Pr(\text{DLT in cycle 2}\mid\text{DLT in cycle 1})
+&amp;=\frac{1/9}{0.20}=\frac59\approx0.556,\\
+\Pr(\text{DLT in cycle 2}\mid\text{no DLT in cycle 1})
+&amp;=\frac{0.20-1/9}{0.80}=\frac19\approx0.111.
+\end{aligned}
+\]</span></p>
+<p>These conditional probabilities average back to 0.20. Under the
+original independent generator, both would be 0.20. The example uses
+fixed doses; in BaSyc the prior outcome also changes the next dose.
+De-escalated patients can therefore be enriched for susceptibility,
+while escalating patients can be selected for tolerance.</p>
+<p>This distinguishes a <strong>fixed-dose marginal risk</strong> from
+the risk among patients actually assigned to that cell:</p>
+<p><span class="math display">\[
+\begin{aligned}
+\Pr(Y_{dj}=1)&amp;=p_{dj},\\
+\Pr(Y_{dj}=1\mid D_j=d,\ \text{earlier observed history})
+&amp;\ \text{may differ from }p_{dj}.
+\end{aligned}
+\]</span></p>
+<p>The first probability remains fixed in the copula experiment. The
+second equals that margin in the original independent construction, but
+need not do so under dependence. Later-cycle empirical cell rates can
+therefore shift even when the copula generator has correct fixed-dose
+margins. There is no guarantee that dependence always increases early
+stopping or unsafe recommendations.</p>
+<p>Cycle 1 is a useful control: a new patient’s vector is independent of
+previous patients, and the first dose is chosen before that patient’s
+own outcomes are known. Its assigned-cell risk should still agree with
+<span class="math inline">\(p_{d1}\)</span>. History-specific summaries
+should record any previous DLT and the previous dose, with full
+histories retained for review.</p>
+</div>
+<div id="how-the-proposed-experiment-would-be-carried-out" class="section level2" number="5.8">
+<h2><span class="header-section-number">5.8</span> How the proposed
+experiment would be carried out</h2>
+<p>The parameters are known simulation inputs. They are not estimated
+from an individual 15-patient trial. Use all six saved surfaces and the
+common tau grid above: one independence setting and six dependent
+settings per scenario, or <strong>42 conditions</strong>. At 10,000
+trials per condition this means 420,000 trial replicates, including
+60,000 independent baseline trials; the nonzero-dependence conditions
+require 360,000 new trial replicates. This remains a proposal, not a
+request to launch those runs now.</p>
+<ol style="list-style-type: decimal">
+<li><p><strong>Freeze the benchmark.</strong> Use the current saved
+settings, marginal risks, safety definition and true MTS. Keep the
+pending PAVA tie change and any new safety/fallback rule outside this
+first dependence comparison.</p></li>
+<li><p><strong>Use the same base random numbers across
+conditions.</strong> Retain the original 15-by-3 independent-uniform
+bank and its draw order for each trial. Draw one extra shared number per
+patient after that bank, or from a documented auxiliary stream.
+Different trial replicates use independent banks; reuse each trial’s
+bank across the compared conditions. Transform these numbers using the
+Gaussian or Clayton construction. At tau zero, return the original
+uniforms directly and reproduce every saved trial, cell and completed
+path record before reusing the existing baseline. <strong>Do not redraw
+a fresh independent number after an intrapatient dose
+decision.</strong></p></li>
+<li><p><strong>Validate the generator before running a trial
+design.</strong> Plan 200,000 independent latent patients for each of
+the seven settings, applying all six surfaces and all 27 fixed
+sequences. Check uniform margins, latent tau, the dose monotonicity of
+potential outcomes, fixed-dose DLT rates, pairwise and three-cycle
+probabilities, and the distribution of the full-cycle count <span class="math inline">\(K\)</span>. Use the copula CDF for analytic joint
+targets and inclusion-exclusion for any/multiple-DLT probabilities.
+Account for Monte Carlo uncertainty across the collection of checks,
+record normal CDF tolerances, and require exact behavior when a risk is
+zero or one.</p></li>
+<li><p><strong>Reveal outcomes in the usual trial order.</strong> Give
+each potential patient one pre-generated vector. Assign doses using
+observed history only; reveal only outcomes at assigned doses when
+follow-up is due. Apply the unchanged counting, DCR, exclusion and
+global-monitoring order, then the unchanged recommendation and fallback.
+Save data before rendering.</p></li>
+<li><p><strong>Retain decision, exposure and patient-burden
+outcomes.</strong> Record exact MTS selection; safe, unsafe and no
+recommendation; coverage and selection given coverage; unsafe exposure;
+enrollment, completion and evaluated cycles; and observed any/multiple
+DLTs. Retain the first stop’s time, triggering cycle, numerator,
+denominator, posterior risk and monitoring activation time, plus
+fallback use and patient dose/outcome histories. Keep unobserved cycles
+missing. Interpret observed DLT counts alongside follow-up length and
+keep them separate from full fixed-sequence counts.</p></li>
+<li><p><strong>Compare paired trial results with uncertainty.</strong>
+Compare each condition with independence and compare the families at
+matching tau. Because conditions reuse base patients, use the standard
+deviation of paired trial differences divided by the square root of the
+trial count for mean differences. For ratios, conditional quantities and
+history strata, resample whole paired trials. Report 95% Monte Carlo
+intervals, counts for sparse groups, and all prespecified conditions. A
+single probability from 10,000 trials has MCSE at most 0.5 percentage
+points; other metrics have their own uncertainty.</p></li>
+</ol>
+<p>For each dose/cycle, also compare the observed DLT fraction with
+<span class="math inline">\(p_{dj}\)</span>. At independence, its
+difference should be compatible with zero; under dependence, later-cycle
+departures can reflect selection by history. Generator validation and
+the cycle-1 control help distinguish that mechanism from a coding
+error.</p>
+<p>Read the results through the questions in Sections 1–4: did the
+design fail to explore the true path, fail to recognize it after
+exploring it, or deliver an undesirable toxicity burden despite
+selecting it? Plot those metrics and global stopping against tau,
+together with stopping time, exposure and patient burden. A stable
+recommendation rate alone does not establish robustness. This experiment
+evaluates the current design under chosen dependence models; it does not
+identify the generator used in the paper. A future objective based on
+repeated toxicity, rather than marginal TPC, would need its own
+dependence-specific true optimum.</p>
 </div>
 </div>
-<div id="references-and-interpretation" class="section level1" number="7">
-<h1><span class="header-section-number">7</span> References and
-interpretation</h1>
+<div id="references" class="section level1" number="6">
+<h1><span class="header-section-number">6</span> References</h1>
 <ul>
 <li><a href="https://doi.org/10.1200/PO.18.00020">Lyu, Curran and Ji
-(2018), BaSyc</a>: the dose/cycle design, simulation margins and
-nonincreasing final-sequence rationale.</li>
-<li><a href="https://saasresearch.hku.hk/~gyin/materials/2009YinYuanJRSSC.pdf">Yin
-and Yuan (2009), Bayesian dose finding by copula regression</a>: primary
-dose-finding precedent for Clayton-inspired and Gumbel-Hougaard
-constructions. Our repeated-cycle generator is a new use of proper
-latent copulas, not a direct copy of their concurrent-drug toxicity
-regression.</li>
+(2018), BaSyc</a>: source of the dose/cycle design and the marginal
+simulation scenarios. The benchmark here is the current coded version
+with its recorded conventions.</li>
+<li><a href="https://copula.r-forge.r-project.org/book/02_copulas.html">Hofert,
+Kojadinovic, Maechler and Yan, <em>Elements of Copula Modeling with
+R</em>, Chapter 2</a>: Gaussian/Clayton constructions, Kendall-tau
+relationships and tail coefficients.</li>
+<li><a href="https://doi.org/10.1080/01621459.1988.10478671">Marshall
+and Olkin (1988), <em>Families of Multivariate Distributions</em></a>:
+mixture-based construction underlying the shared-frailty sampling
+approach.</li>
+<li><a href="https://github.com/cran/copula/blob/master/R/claytonCopula.R">The
+<code>copula</code> package’s Clayton implementation</a>: explicit
+gamma-frailty generation with shape <span class="math inline">\(1/\theta\)</span> and rate one, including an
+independence branch.</li>
 <li><a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC4234400/">Cunanan
-and Koopmeiners (2014), copula misspecification in Phase I-II
-trials</a>: precedent for separating data-generating association from
-the fitted working model and examining robustness. Their
-efficacy/toxicity setting differs from repeated toxicity with adaptive
-intrapatient dose changes; its robustness findings do not establish
-robustness of this benchmark.</li>
+and Koopmeiners (2014), copula misspecification in Phase I–II
+trials</a>: precedent for separating a data-generating association model
+from a fitted working model. Its efficacy/toxicity setting differs from
+this repeated-cycle experiment; the present protocol makes its own
+robustness assessment.</li>
 </ul>
-<p>The proposed copulas belong to the <strong>data generator</strong>.
-BaSyc remains the same working design during the initial stress tests,
-so no PK/PD model or copula parameter estimation is required to carry
-them out.</p>
 </div>
 
 

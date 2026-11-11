@@ -219,6 +219,9 @@ without sourcing the simulator or generating trial outcomes. It displays
 recommendation categories, dose/cycle allocation bars and heatmaps, completed
 patient transitions, and true-MTS coverage versus selection. Scenario-specific
 interpretations distinguish exploration, selection and patient exposure.
-The final section proposes one- and two-parameter copula stress tests; no
-copula generator or new simulation is implemented. Knit this report separately
+The copula proposal defines notation, one-parameter exchangeable Gaussian
+and Clayton generators, matched Kendall-tau settings, fixed-sequence validation,
+an adaptive trial procedure, paired Monte Carlo comparisons and interpretation.
+The former cycle-trend section and the more complex copula extensions are removed.
+No copula generator or new simulation is implemented. Knit this report separately
 when the saved RDS changes; `unity.sh` continues to render the reproduction report.
