@@ -1,6 +1,6 @@
 ---
-title: "Lyu 2018: allocation, scenario performance and dependence stress tests"
-date: "2026-11-10"
+title: "Lyu 2018: allocation, scenario performance and assumption stress tests"
+date: "2026-11-12"
 output:
   html_document:
     toc: true
@@ -41,8 +41,8 @@ document.addEventListener("DOMContentLoaded",function(){
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo=FALSE, warning=TRUE, error=FALSE, cache=FALSE,
                       fig.align="center", dpi=150, dev.args=list(pointsize=14))
-# This notebook ONLY reads the saved RDS. It does not source or call a trial
-# simulator, generate outcomes, fit a new design, or replace any saved data.
+# This notebook reads saved original/stress RDS files and pure helpers.
+# Knitting never generates outcomes, runs trials, or replaces saved data.
 lyu_dir <- if(file.exists("data/table3.rds")) "." else "Lyu_2018"
 saved <- readRDS(file.path(lyu_dir,"data","table3.rds"))
 trials <- saved$trials
@@ -487,423 +487,404 @@ for(s in scenarios) {
 par(op)
 ```
 
-# Copula stress tests: changing dependence between cycles
+# Stress tests of intensity ordering and cycle trends
 
-This section proposes a future experiment. **We change how a patient's
-cycle outcomes are generated, while keeping the current coded design fixed.**
-No copula generator or new stress-test simulation is run by this notebook.
+The copula proposal is now in [copula_proposal.Rmd](copula_proposal.Rmd).
+Here we change the **marginal dose/cycle risks**, while retaining independent
+patient/cycle random numbers and the current coded trial rules. These are
+robustness experiments, not additional scenarios published by Lyu et al.
 
-We explain one scenario and one patient at a time. The scenario and trial
-replicate labels are omitted from the equations; each patient receives a
-fresh set of random numbers when the experiment is eventually run.
+## One truth formula, including the original six scenarios
 
-## What assumption changes from the original simulation?
-
-Let $p_{dj}$ be the specified DLT probability for **dose $d$ in cycle $j$**.
-These are the same six dose/cycle probability surfaces used above. In the
-original generator, a patient's outcome in one cycle gives no information
-about the random number generating that patient's next outcome. The copula
-proposal replaces that **within-patient independence** with positive association.
-
-Here, independence refers to the **unobserved cycle-specific random numbers**.
-Even in the original adaptive trial, observed DLTs need not be independent:
-an earlier DLT can change the next dose. The copula adds association beyond
-that dose-decision pathway.
-
-| Part of the experiment | Original generator | Copula generator |
-|:--|:--|:--|
-| Fixed-dose risk $p_{dj}$ | Saved dose/cycle probabilities | Same probabilities |
-| Association across one patient's cycles | Independent random numbers | Associated random numbers |
-| Association between different patients | Independent patient vectors | Independent patient vectors |
-| Dose monotonicity within a cycle | Same random number thresholds all candidate doses | Same construction |
-| Allocation, monitoring and recommendation | Current coded rules | Same rules |
-| Fixed-sequence TPC, safety and true MTS | Determined by the saved $p_{dj}$ | Same marginal definitions and labels |
-
-The design receives observed doses and DLTs. It does not receive a copula
-parameter. Its beta-binomial working calculations and decision rules are
-retained, although their operating characteristics can change when the
-outcome generator changes. In particular, retaining the algorithm does not
-guarantee its working assumptions describe the new data exactly.
-
-Keep the recorded strict $n>3$ safety convention, global-monitoring and
-exclusion timing, equal PAVA weights, higher-position ties, final screening
-and restricted-revote fallback. The target remains 0.30, the EI is
-(0.25, 0.35), and the posterior safety cutoff is 0.95. The pending
-target-dependent PAVA tie hypothesis belongs to a later design comparison.
-
-## How uniform random numbers become DLT outcomes
-
-For this patient, let $U_j$ be an unobserved random number between zero and
-one for cycle $j$. Each $U_j$ is uniformly distributed. If the patient were
-given dose $d$ in that cycle, define the potential outcome
+For dose $d$ and cycle $j$, let $b_d$ be the first-cycle toxicity risk. Use
 
 $$
-Y_{dj}=\mathbf1\{U_j\le p_{dj}\}.
+p_{dj}=\min\left\{1,\ b_d r^{j-1}c^{(j-1)(j-2)/2}\right\},
+\qquad d,j=1,2,3.
 $$
 
-Here $Y_{dj}=1$ means a DLT and $Y_{dj}=0$ means no DLT. For example, a dose
-with risk 0.20 causes a DLT whenever $U_j\le0.20$. Uniformity gives
-$\Pr(Y_{dj}=1)=p_{dj}$.
+Before capping, the three risks are simply $b_d(1,r,r^2c)$.
+The first cycle-to-cycle risk multiplier is $r$; the second is $rc$.
+Thus $c<1$ slows relative growth, and $r>1,rc<1$ produces a peak followed
+by recovery. Slower relative growth does not always mean a smaller absolute
+increase. The three $b_d$ values control the dose-response shape; changing
+$b_2$ between fixed endpoints changes its curvature. This simple family
+retains relative dose-response shape across cycles, until capping.
 
-Use the same $U_j$ for all candidate doses in that cycle. Increasing the
-dose can then change no DLT to DLT, but cannot change DLT to no DLT when
-$p_{dj}$ increases with dose. This threshold coupling is already present
-in the original generator; it is not the new dependence assumption.
+For every original scenario, **$r=1.10$ and $c=1$**, so the formula becomes
+$p_{dj}=\min\{1,b_d1.1^{j-1}\}$. The following are the exact inputs:
 
-Write $D_j$ for the dose actually assigned in cycle $j$. Only
-$Y_{D_j,j}$ is revealed, at its scheduled assessment. Other potential
-outcomes and future outcomes stay hidden from the trial rules.
+```{r stress-load, include=FALSE}
+source(file.path(lyu_dir,"R","assumption_stress.R")) # definitions only
+stress_available <- file.exists(file.path(lyu_dir,"data","assumption_stress.rds"))
+stress_data <- if(stress_available) readRDS(file.path(lyu_dir,"data","assumption_stress.rds")) else NULL
+stress_summary <- if(stress_available) summarize_assumption_stress(stress_data) else NULL
+stress_parameters <- if(stress_available) stress_data$scenario_parameters else stress_scenarios()
+stress_audit_table <- if(stress_available) stress_data$truth_audit else
+  cbind(stress_parameters,do.call(rbind,lapply(stress_truth(stress_parameters),stress_audit)))
+stress_n <- if(stress_available) unique(stress_summary$n) else 10000L
+if(stress_available) stopifnot(length(stress_n)==1,all(stress_data$rule_check$benchmark==stress_data$rule_check$stress),
+          nrow(stress_data$trials)==4*stress_n,
+          sum(stress_data$cells$n)==sum(stress_data$trials$patient_cycles),
+          sum(stress_data$cells$dlts)==sum(stress_data$trials$dlts))
+stress_run_description <- if(stress_available) sprintf(
+  'The server ran **%s trials per new scenario**, %s trials in total.',
+  format(stress_n,big.mark=','),format(nrow(stress_data$trials),big.mark=',')) else
+  '**The full server run is pending.** The planned run is 10,000 trials per new scenario (40,000 total). Truth curves and oracle calculations below are deterministic; no trial results are substituted.'
+stress_runtime_description <- if(stress_available) sprintf(
+  'Total simulation and scoring runtime was **%.1f seconds** (%.2f minutes), excluding queueing, transfer and rendering. The trial engine used %.1f seconds. Saved Slurm job: %s; node: %s; allocated cores: %s.',
+  stress_data$runtime_seconds,stress_data$runtime_seconds/60,stress_data$engine_runtime_seconds,
+  stress_data$job[['SLURM_JOB_ID']],stress_data$job[['SLURM_JOB_NODELIST']],stress_data$job[['SLURM_CPUS_PER_TASK']]) else
+  'No full stress-test dataset is available yet. Results, figures, runtime and server-job details will appear here automatically after the saved RDS is collected.'
+```
 
-A **copula** describes how the three uniform random numbers go together:
+```{r original-formula-inputs}
+knitr::kable(stress_parameters[1:6,c("scenario","b1","b2","b3","r","c")],
+             digits=4,col.names=c("Scenario","b1","b2","b3","r","c"))
+```
+
+`stress_probability()` reproduces all 54 saved original risk cells within
+$10^{-12}$. S4 D3/C3 would be $.84(1.1)^2=1.0164$; the same documented cap
+at one is retained. New scenarios do not require capping.
+
+## The four additional scenarios
+
+```{r new-stress-inputs}
+knitr::kable(stress_parameters[7:10,c("scenario","label","b1","b2","b3","r","c")],
+             digits=5,col.names=c("Scenario","Curve","b1","b2","b3","r","c"))
+```
+
+- **S7:** the large increase is between D1 and D2. All nine risks are below
+  .35, and toxicity increases across cycles. However, $I(222)=6<7=I(331)$,
+  while $q(222)=.303417>q(331)=.280167$. The best safe sequence is 222.
+- **S8:** the large increase is between D2 and D3. All nine cells remain safe
+  and cycle risks increase. For example, $I(311)=5<6=I(222)$ but
+  $q(311)=.281700>q(222)=.260134$. The best safe sequence is 331.
+- **S9:** reverse the cycle columns of original S1. This is represented by
+  $b=1.21(.15,.30,.45)$, $r=1/1.1$, and $c=1$. Reversal preserves the entire
+  collection of intensity/TPC pairs, so intensity ordering still holds;
+  risks now decrease across cycles. The best nonincreasing safe sequence is
+  111, but the best safe sequence without that restriction is 122.
+- **S10:** $r=1.3,c=.5$ gives cycle multipliers $(1,1.3,.845)$: risk rises,
+  then falls. Global intensity ordering also fails. Its reversed pairs
+  involve unsafe sequences; ordering among truly safe sequences holds.
+  The best nonincreasing safe sequence is 211, versus 213 unrestricted.
+
+Here $I(s)$ sums dose-level labels, and $q(s)$ averages the three true
+component risks. The audit considers **all 27 sequences**, not just paths
+that happen to be explored. A true-safe sequence has all three risks below
+.35, following Table 3's truth definition. This differs from posterior
+safety monitoring during a trial.
+
+```{r stress-assumption-audit}
+a <- stress_audit_table[7:10,]
+knitr::kable(data.frame(Scenario=a$scenario,
+  Dose_increasing=a$dose_monotone,Cycle_nondecreasing=a$cycle_nondecreasing,
+  Intensity_reversals=paste0(a$inversions,"/",a$pairs),
+  Safe_pair_reversals=paste0(a$safe_inversions,"/",a$safe_pairs),
+  Max_TPC_reversal=round(a$max_inversion,5)),
+  col.names=c("Scenario","Dose monotone","Cycle nondecreasing","Intensity reversals","Safe-pair reversals","Max TPC reversal"))
+```
+
+Among the 42 different-intensity pairs of nonincreasing sequences, S7 and
+S8 each have one reversal; S9 and S10 have none.
+
+## Adjust the truth curves
+
+The controls below preview truths only. **They do not rerun simulations or
+change the saved results.** Start from any original or new scenario; adjust
+the middle first-cycle risk, initial growth, or later growth. The cycle
+view shows accumulation or recovery; the intensity view marks true-safe
+and unsafe sequences and reports actual order violations.
+
+```{r stress-widget-data, results='asis'}
+cat('<script type="application/json" id="stress-truth-inputs">',
+    jsonlite::toJSON(stress_parameters,digits=15,dataframe="rows"),'</script>\n',sep="")
+```
+
+<div id="stress-truth-widget" style="margin:20px 0;">
+<style>
+#stress-truth-widget .truth-controls {display:flex;flex-wrap:wrap;gap:16px;margin:16px 0;}
+#stress-truth-widget .truth-field {flex:1 1 250px;min-width:0;}
+#stress-truth-widget label {display:block;font-weight:normal;}
+#stress-truth-widget input {width:100%;}
+#stress-truth-widget output {float:right;font-variant-numeric:tabular-nums;}
+#stress-truth-widget .truth-views {display:flex;flex-wrap:wrap;gap:8px;}
+#stress-truth-widget svg {display:block;width:100%;height:350px;overflow:visible;}
+#stress-truth-widget .truth-info {margin-top:10px;}
+</style>
+<label for="stress-start">Starting scenario</label>
+<select id="stress-start" class="form-control"></select>
+<div class="truth-controls">
+<div class="truth-field"><label for="stress-middle">Middle-dose cycle-1 risk <output id="stress-middle-value"></output></label><input type="range" id="stress-middle" step="0.0001"></div>
+<div class="truth-field"><label for="stress-r">Initial growth, r <output id="stress-r-value"></output></label><input type="range" id="stress-r" min=".5" max="1.6" step=".0001"></div>
+<div class="truth-field"><label for="stress-c">Later growth adjustment, c <output id="stress-c-value"></output></label><input type="range" id="stress-c" min=".2" max="1.6" step=".0001"></div>
+</div>
+<div class="truth-views" role="group" aria-label="Truth chart view">
+<button type="button" class="btn btn-default" data-truth-view="dose">By dose</button>
+<button type="button" class="btn btn-default" data-truth-view="cycle">By cycle</button>
+<button type="button" class="btn btn-default" data-truth-view="ordering">Intensity ordering</button>
+</div>
+<div id="stress-truth-legend" style="display:flex;flex-wrap:wrap;gap:18px;margin-top:12px;" aria-label="Chart legend"></div>
+<svg id="stress-truth-chart" role="img" aria-label="Adjustable dose-cycle toxicity probabilities"></svg>
+<div class="truth-info" id="stress-truth-status" aria-live="polite"></div>
+<div class="truth-info" id="stress-truth-pair"></div>
+</div>
+<script>
+(function(){
+ const root=document.getElementById('stress-truth-widget');
+ const cases=JSON.parse(document.getElementById('stress-truth-inputs').textContent);
+ const pick=root.querySelector('#stress-start'), middle=root.querySelector('#stress-middle'), r=root.querySelector('#stress-r'), c=root.querySelector('#stress-c');
+ const svg=root.querySelector('#stress-truth-chart'),ns='http://www.w3.org/2000/svg';
+ const palette=['#276FBF','#27885E','#8955B8'],pct=x=>(100*x).toFixed(2)+'%';
+ let state={scenario:7,middle:cases[6].b2,r:cases[6].r,c:cases[6].c,view:'cycle'};
+ cases.forEach(s=>{const op=document.createElement('option');op.value=s.scenario;op.textContent='S'+s.scenario+' — '+s.label;pick.append(op);});
+ // The same deterministic formula as stress_probability(); no outcomes are drawn.
+ function truth(){
+  const s=cases.find(s=>s.scenario===state.scenario),b=[s.b1,state.middle,s.b3];
+  const p=b.map(x=>[0,1,2].map(t=>Math.min(1,x*state.r**t*state.c**(t*(t-1)/2))));
+  const paths=[];
+  for(let a=1;a<=3;a++)for(let b=1;b<=3;b++)for(let d=1;d<=3;d++){
+   const risks=[p[a-1][0],p[b-1][1],p[d-1][2]];
+   paths.push({name:''+a+b+d,I:a+b+d,q:risks.reduce((x,y)=>x+y,0)/3,safe:risks.every(x=>x<.35)});
+  }
+  let bad=0,safeBad=0,safePairs=0,worst=null,worstSafe=null;
+  for(const a of paths)for(const b of paths)if(a.I<b.I){
+   if(a.safe&&b.safe)safePairs++;
+   const gap=a.q-b.q;
+   if(gap>1e-12){bad++;if(!worst||gap>worst.gap)worst={a,b,gap};if(a.safe&&b.safe){safeBad++;if(!worstSafe||gap>worstSafe.gap)worstSafe={a,b,gap};}}
+  }
+  const up=p.every(x=>x[0]<=x[1]+1e-12&&x[1]<=x[2]+1e-12),down=p.every(x=>x[0]>=x[1]-1e-12&&x[1]>=x[2]-1e-12);
+  return {b,p,paths,bad,safeBad,safePairs,worst:worstSafe||worst,worstIsSafe:!!worstSafe,trend:up?(down?'flat':'nondecreasing'):(down?'nonincreasing':'changes direction')};
+ }
+ function mark(tag,attrs,text){const el=document.createElementNS(ns,tag);Object.entries(attrs).forEach(([k,v])=>el.setAttribute(k,v));if(text!==undefined)el.textContent=text;svg.append(el);return el;}
+ function draw(){
+  const z=truth(),s=cases.find(s=>s.scenario===state.scenario);
+  pick.value=state.scenario;middle.min=s.b1;middle.max=s.b3;middle.value=state.middle;r.value=state.r;c.value=state.c;
+  root.querySelector('#stress-middle-value').textContent=pct(state.middle);root.querySelector('#stress-r-value').textContent=state.r.toFixed(4);root.querySelector('#stress-c-value').textContent=state.c.toFixed(4);
+  root.querySelectorAll('[data-truth-view]').forEach(b=>{b.classList.toggle('btn-primary',b.dataset.truthView===state.view);b.setAttribute('aria-pressed',String(b.dataset.truthView===state.view));});
+  const legend=root.querySelector('#stress-truth-legend');legend.replaceChildren();
+  if(state.view!=='ordering')for(let k=0;k<3;k++){const label=document.createElement('span');label.textContent=(state.view==='cycle'?'Dose ':'Cycle ')+(k+1);label.style.color=palette[k];legend.append(label);}
+  svg.replaceChildren();const w=Math.max(260,root.clientWidth),h=350,left=55,right=18,top=35,bottom=55;
+  const ordering=state.view==='ordering',ymax=Math.min(1,Math.max(.4,Math.ceil(Math.max(...z.p.flat())*11)/10));
+  const x=v=>left+(v-(ordering?3:1))/(ordering?6:2)*(w-left-right),y=v=>h-bottom-v/ymax*(h-top-bottom);
+  for(let i=0;i<=4;i++){const v=ymax*i/4;mark('line',{x1:left,x2:w-right,y1:y(v),y2:y(v),stroke:'#e3e7eb'});mark('text',{x:left-8,y:y(v)+4,'text-anchor':'end','font-size':12},Math.round(v*100)+'%');}
+  const ticks=ordering?[3,4,5,6,7,8,9]:[1,2,3];ticks.forEach(v=>mark('text',{x:x(v),y:h-bottom+22,'text-anchor':'middle','font-size':12},v));
+  mark('text',{x:left,y:17,'font-size':13},ordering?'TPC · blue safe, red unsafe':'DLT probability');
+  mark('text',{x:(w+left-right)/2,y:h-8,'text-anchor':'middle','font-size':13},ordering?'Intensity (sum of dose-level labels)':state.view==='cycle'?'Cycle':'Dose level');
+  if(ordering){
+   const ref=mark('line',{x1:left,x2:w-right,y1:y(.30),y2:y(.30),stroke:'#777','stroke-dasharray':'4 4'});ref.appendChild(document.createElementNS(ns,'title')).textContent='Target TPC 30%';
+   z.paths.forEach(p=>{const dot=mark('circle',{cx:x(p.I),cy:y(p.q),r:4.5,fill:p.safe?'#276FBF':'#CE4B4B',opacity:.8});const title=document.createElementNS(ns,'title');title.textContent=p.name+': I='+p.I+', TPC='+pct(p.q)+', '+(p.safe?'safe':'unsafe');dot.append(title);});
+   if(z.worst)mark('line',{x1:x(z.worst.a.I),x2:x(z.worst.b.I),y1:y(z.worst.a.q),y2:y(z.worst.b.q),stroke:'#555','stroke-width':2});
+  }else for(let k=0;k<3;k++){
+   const values=[0,1,2].map(i=>state.view==='cycle'?z.p[k][i]:z.p[i][k]);
+   mark('polyline',{points:values.map((v,i)=>x(i+1)+','+y(v)).join(' '),fill:'none',stroke:palette[k],'stroke-width':2});
+   values.forEach((v,i)=>{const dot=mark('circle',{cx:x(i+1),cy:y(v),r:4,fill:palette[k]});const title=document.createElementNS(ns,'title');title.textContent=(state.view==='cycle'?'Dose ':'Cycle ')+(k+1)+', '+(i+1)+': '+pct(v);dot.append(title);});
+  }
+  root.querySelector('#stress-truth-status').textContent='Cycle-1 risks: '+z.b.map(pct).join(', ')+' | Cycle trend: '+z.trend+' | Intensity reversals: '+z.bad+'/294 | Safe-pair reversals: '+(z.safePairs?z.safeBad+'/'+z.safePairs:'no eligible pairs');
+  const pair=z.worst;root.querySelector('#stress-truth-pair').textContent=pair?(z.worstIsSafe?'Largest safe reversal: ':'Largest reversal (includes unsafe sequence): ')+pair.a.name+' (I='+pair.a.I+', TPC='+pct(pair.a.q)+') > '+pair.b.name+' (I='+pair.b.I+', TPC='+pct(pair.b.q)+')':'No cross-intensity reversals.';
+ }
+ pick.onchange=()=>{const s=cases.find(s=>s.scenario===Number(pick.value));state={...state,scenario:s.scenario,middle:s.b2,r:s.r,c:s.c};draw();};
+ [[middle,'middle'],[r,'r'],[c,'c']].forEach(([el,key])=>el.oninput=()=>{state[key]=Number(el.value);draw();});
+ root.querySelectorAll('[data-truth-view]').forEach(b=>b.onclick=()=>{state.view=b.dataset.truthView;draw();});
+ new ResizeObserver(draw).observe(root);draw();
+})();
+</script>
+
+## The unchanged experiment and its truth benchmarks
+
+`r stress_run_description` Each trial
+uses the existing `simulate_table3()` engine: 15 patients, cohorts of three,
+three eight-week cycles, target .30, EI (.25,.35), and posterior cutoff .95.
+It retains strict $n>3$ intratrial safety, the current delayed global-monitor
+and exclusion timing, equal-weight PAVA, original higher-position nearest
+ties, final screening minimum zero, and the restricted-revote NO-MTS fallback.
+The delayed global rule and fallback remain documented benchmark conventions,
+not verified author implementations. The run checks all 18 recorded clinical
+and generator settings against the saved original run before saving results.
+
+Let $\mathcal S_{\mathrm{safe}}$ contain sequences with all component risks
+below .35, and let $\mathcal S_{\downarrow}$ be its nonincreasing subset.
+We evaluate both
 
 $$
-C(u_1,u_2,u_3)
-=\Pr(U_1\le u_1,\ U_2\le u_2,\ U_3\le u_3).
-$$
-
-The arguments $u_1,u_2,u_3$ are cutoffs, not doses or extra parameters.
-For any copula, $C(u,1,1)=u$, and likewise for the other cycles. Thus it
-can change joint probabilities while keeping each individual risk fixed.
-The original independence copula is simply
-
-$$
-C(u_1,u_2,u_3)=u_1u_2u_3.
-$$
-
-For a fixed sequence $(d_1,d_2,d_3)$, the probability of three DLTs is
-$C(p_{d_1,1},p_{d_2,2},p_{d_3,3})$. The independent generator gives the
-product of those three risks. The next two families replace that product
-with different patterns of positive association.
-
-## Gaussian copula: a shared patient component, controlled by rho
-
-The Gaussian copula starts with three correlated normal scores and turns
-them into uniform random numbers. A convenient construction is
-
-$$
-Z_j=\sqrt{\rho}\,B+\sqrt{1-\rho}\,\varepsilon_j,
-\qquad U_j=\Phi(Z_j),
-\qquad j=1,2,3.
-$$
-
-The patient has one shared score $B$. Each cycle has its own score
-$\varepsilon_j$. All four input scores are independent standard normals
-(mean zero, variance one). $\Phi$ is the standard normal cumulative
-distribution function: it converts a normal score into its percentile.
-Consequently, each $U_j$ is uniform.
-
-**What does $\rho$ mean?** It is the correlation between any two normal
-scores $Z_j$, not between the observed binary DLT outcomes. It is also the
-fraction of each score's variance supplied by the shared component. At
-$\rho=0$ there is no shared contribution and the cycles are independent.
-At $\rho=0.5$, half the variance is shared and half is cycle-specific.
-As $\rho$ approaches one, the three scores increasingly move together.
-
-A patient with a low shared score tends to have low uniforms in several
-cycles, making repeated DLTs more likely. These scores are mathematical
-simulation devices, not measured biomarkers or PK/PD parameters.
-
-The formal copula CDF is
-
-$$
-C_G(u_1,u_2,u_3;\rho)
-=\Phi_3\!\left(\Phi^{-1}(u_1),\Phi^{-1}(u_2),\Phi^{-1}(u_3);R_\rho\right),
-$$
-
-$$
-R_\rho=\begin{pmatrix}
-1&\rho&\rho\\
-\rho&1&\rho\\
-\rho&\rho&1
-\end{pmatrix}.
-$$
-
-Here $\Phi^{-1}$ converts a percentile back to a normal score, and
-$\Phi_3$ computes the joint probability for three normal scores.
-The matrix says that each score has variance one and every cycle pair
-has correlation $\rho$. We propose $0\le\rho<1$: **one parameter for all
-three pairs**, including cycles 1 and 3. There is no separate lag parameter.
-
-## Clayton copula: clustering of small uniforms, controlled by theta
-
-For positive association, the three-cycle Clayton copula is
-
-$$
-C_C(u_1,u_2,u_3;\theta)
-=\left(u_1^{-\theta}+u_2^{-\theta}+u_3^{-\theta}-2\right)^{-1/\theta},
-\qquad \theta>0.
-$$
-
-**What does $\theta$ mean?** It controls the strength of association.
-Larger values give stronger association; independence is the limit as
-$\theta$ approaches zero. It is not a probability or a binary correlation.
-The same parameter governs all cycle pairs.
-
-The formula preserves the uniform margins. For example,
-
-$$
-C_C(u,1,1;\theta)
-=\left(u^{-\theta}+1+1-2\right)^{-1/\theta}=u.
-$$
-
-The minus two cancels the contributions from the other two cycles when
-their cutoffs are one. At a zero cutoff the joint CDF is zero by continuity.
-At $\theta=0$, use the independent-uniform branch directly rather than
-substituting zero into a formula containing $1/\theta$.
-
-One way to generate these uniforms also uses a shared patient component:
-
-$$
-\begin{aligned}
-W&\sim\operatorname{Gamma}(\text{shape}=1/\theta,\text{rate}=1),\\
-E_1,E_2,E_3&\overset{\mathrm{iid}}{\sim}\operatorname{Exp}(\text{rate}=1).
-\end{aligned}
-$$
-
-$$
-U_j=\left(1+\frac{E_j}{W}\right)^{-1/\theta}.
-$$
-
-$W$ is a positive random number shared by the patient's cycles; the
-$E_j$ are independent positive numbers giving cycle-specific variation,
-also independent of $W$. For a fixed $\theta$, a small $W$ pushes several
-uniforms toward zero. Since our DLT rule uses small uniforms, this produces
-clustering of toxicities. The gamma and exponential draws are a sampling
-recipe; **$\theta$ is still the only free dependence parameter**.
-
-This concentration near jointly small uniforms is called **lower-tail
-dependence**. Gaussian association is symmetric between low and high
-uniform ranks; Clayton emphasizes the low end. A Gaussian copula can also
-produce repeated DLTs at clinical thresholds. Neither construction adds
-a causal effect of the previous dose to $p_{dj}$: statistical association
-between cycles and pharmacologic carryover are different assumptions.
-
-## Comparing the two parameters on a common scale
-
-A Gaussian $\rho$ of 0.5 and a Clayton $\theta$ of 0.5 do not represent the
-same association. We therefore choose **Kendall's tau**, written $\tau$,
-first and convert it to each family's parameter.
-
-To understand tau, compare two independent patients' uniforms in two
-cycles. Their rankings agree if the patient with the smaller uniform in
-one cycle also has the smaller uniform in the other cycle. Tau is the
-probability of agreeing rankings minus the probability of reversed
-rankings. It is zero at independence for these families and approaches
-one as the ranks move together. It refers to the **unobserved uniforms**;
-$\tau=0.4$ does not mean a 40% binary DLT correlation or a 40% chance of
-repeated toxicity.
-
-The conversions are
-
-$$
-\tau=\frac{2}{\pi}\arcsin(\rho)
-\quad\Longleftrightarrow\quad
-\rho=\sin(\pi\tau/2)
-\qquad\text{(Gaussian)},
-$$
-
-$$
-\tau=\frac{\theta}{\theta+2}
-\quad\Longleftrightarrow\quad
-\theta=\frac{2\tau}{1-\tau}
-\qquad\text{(Clayton)}.
-$$
-
-| Chosen latent $\tau$ | Gaussian $\rho$ | Clayton $\theta$ | Meaning in this experiment |
-|--:|--:|--:|:--|
-| 0 | 0 | 0, using the independence branch | Original independent generator |
-| 0.2 | 0.3090 | 0.5000 | Weaker positive association |
-| 0.4 | 0.5878 | 1.3333 | Intermediate positive association |
-| 0.6 | 0.8090 | 3.0000 | Stronger positive association |
-
-Tau is a way of specifying the same single parameter, not an additional
-parameter to estimate. These settings cover positive association only.
-Matching tau matches rank association for all three cycle pairs. It does
-not match binary DLT correlations, all three-cycle probabilities, or the
-entire joint distribution. A Gaussian-versus-Clayton contrast therefore
-compares distributional shapes at matched tau, not a pure tail effect.
-
-## What stays fixed, and what can change for a patient?
-
-For a fixed sequence $(d_1,d_2,d_3)$, let $K$ be the number of DLTs over
-its three complete cycles. Regardless of the copula,
-
-$$
-E(K)=p_{d_1,1}+p_{d_2,2}+p_{d_3,3},
+\mathcal O_{\downarrow}=\arg\min_{s\in\mathcal S_{\downarrow}}|q(s)-.30|,
 \qquad
-q(d_1,d_2,d_3)=\frac{E(K)}3.
+\mathcal O_{\mathrm{all}}=\arg\min_{s\in\mathcal S_{\mathrm{safe}}}|q(s)-.30|.
 $$
 
-Thus the mean TPC is unchanged. The saved safety definition still requires
-every cycle risk to be below 0.35, so the marginal true MTS is unchanged
-and S4 still has no safe MTS. The copula changes how DLTs are distributed
-among patients and cycles, including the probabilities of any or repeated
-DLTs. It is not a new definition of the optimal sequence.
+The first respects BaSyc's recommendation class. The second diagnoses the
+cost of that restriction; it does **not** change the design's estimand or
+allow increasing recommendations. Equivalent optima receive equal credit;
+the original single-label PCS is also retained in the data. The structural
+gap is the difference in their best achievable absolute target distances.
 
-For transparent arithmetic only, suppose all three fixed-cycle risks are
-0.20. With Clayton $\theta=1$, the probability of three DLTs is
+```{r stress-oracle-table}
+a <- stress_audit_table[7:10,]
+knitr::kable(data.frame(Scenario=a$scenario,
+  Best_nonincreasing=short_sequence(a$optimal_down),Best_unrestricted=short_sequence(a$optimal_all),
+  Restricted_distance=round(a$distance_down,5),Unrestricted_distance=round(a$distance_all,5),
+  Structural_gap=round(a$structural_gap,5)),
+  col.names=c("Scenario","Best nonincreasing","Best unrestricted","Restricted distance","Unrestricted distance","Structural gap"))
+```
 
-$$
-C_C(0.20,0.20,0.20;1)=\frac1{5+5+5-2}=\frac1{13}.
-$$
+S9 and S10 have increasing unrestricted optima. Their unrestricted selection
+probability is necessarily zero under the unchanged design. This is a
+structural limitation, even with unlimited information, rather than a Monte
+Carlo error or an unsuccessful PAVA fit.
 
-The following values are exact calculations, not simulated results or an
-additional planned scenario:
+## Saved simulation results
 
-| Generator in this illustration | $E(K)$ | At least one DLT | At least two DLTs | Three DLTs |
-|:--|--:|--:|--:|--:|
-| Independent cycles | 0.600 | 0.488 | 0.104 | 0.008 |
-| Clayton, $\theta=1$ | 0.600 | 0.344 | 0.179 | 0.077 |
+`r stress_runtime_description`
 
-The average burden is identical, but the Clayton example has more
-DLT-free patients and more patients with repeated DLTs. For other unequal
-risks, calculate the joint event probabilities rather than assuming every
-multiple-DLT metric changes in the same direction.
+```{r stress-result-table, eval=stress_available}
+s <- stress_summary
+knitr::kable(data.frame(Scenario=s$scenario,Trials=s$n,
+  Select_best_nonincreasing=percent(s$optimal_down),Select_best_unrestricted=percent(s$optimal_all),
+  Unsafe_recommendation=percent(s$unsafe),No_recommendation=percent(s$none),
+  Early_stop=percent(s$early_stop),Unsafe_exposure=percent(s$unsafe_exposure)),
+  col.names=c("Scenario","Trials","Best nonincreasing","Best unrestricted","Unsafe","None","Early stop","Unsafe exposure"))
+```
 
-## Why can allocation performance change if the rules stay the same?
+```{r stress-performance-plot, eval=stress_available, fig.width=12, fig.height=5.3, fig.cap='Left: probability of observing the best nonincreasing sequence and probability of selecting it. Right: unsafe recommendation, no recommendation, and early stopping. These categories on the right can overlap. Whiskers are 95% Monte Carlo intervals for trial-level binary outcomes.'}
+oldpar <- par(mfrow=c(1,2),mar=c(4.5,4.5,3,1)); s <- stress_summary
+metric <- function(values,labels,cols,title) {
+  pos <- barplot(100*values,beside=TRUE,names.arg=paste0("S",s$scenario),
+                 col=cols,border=NA,ylim=c(0,125),yaxt="n",ylab="Trials (%)",main=title)
+  axis(2,at=seq(0,100,20),las=1)
+  n <- matrix(s$n,nrow(values),ncol(values),byrow=TRUE)
+  center <- (values+1.96^2/(2*n))/(1+1.96^2/n)
+  half <- 1.96*sqrt(values*(1-values)/n+1.96^2/(4*n^2))/(1+1.96^2/n)
+  arrows(pos,pmax(0,100*(center-half)),pos,pmin(100,100*(center+half)),
+         angle=90,code=3,length=.03,col="#555555")
+  legend("topright",legend=labels,fill=cols,bty="n",cex=.85)
+}
+metric(rbind(s$coverage,s$optimal_down),c("Observed optimum","Selected optimum"),
+       c("#91B4D9","#276FBF"),"Exploration and selection")
+metric(rbind(s$unsafe,s$none,s$early_stop),c("Unsafe recommendation","No recommendation","Early stop"),
+       c("#CE4B4B","#A8B3BC","#8955B8"),"Safety and termination")
+par(oldpar)
+```
 
-The rules do not use a copula parameter, but they **react to earlier DLTs**.
-With positive association, an earlier DLT gives information about the
-patient's later outcomes even before the next dose is chosen.
+```{r stress-selection-spectrum, eval=stress_available, fig.width=13, fig.height=9, fig.cap='Final sequence selection. Gold: a best true-safe nonincreasing sequence; blue: another safe sequence; red: an unsafe sequence; gray: no recommendation. Labels use dose-level triples.'}
+oldpar <- par(mfrow=c(2,2),mar=c(6,4.5,4.5,1))
+for(id in 7:10) {
+  z <- subset(stress_data$sequence_truth,scenario==id & nonincreasing)
+  z <- z[order(z$intensity,z$sequence),]
+  labels <- c(z$sequence,"None")
+  counts <- table(factor(stress_data$trials$selected_mts[stress_data$trials$scenario==id],levels=labels))
+  fill <- c(ifelse(z$optimal_down,"#D5A021",ifelse(z$safe,"#276FBF","#CE4B4B")),"#A8B3BC")
+  barplot(100*counts/sum(counts),names.arg=short_sequence(labels),las=2,col=fill,border=NA,
+          ylab="Trials (%)",ylim=c(0,100),main=paste0("S",id,": ",stress_parameters$label[id]))
+}
+par(oldpar)
+```
 
-Continue the fixed-risk 0.20 example with Clayton $\theta=1$. The chance
-of DLT in both cycles 1 and 2 is
+```{r stress-allocation-heatmaps, eval=stress_available, fig.width=12, fig.height=9, fig.cap='Mean evaluated patients per dose/cycle. Each cell gives mean allocation n and true risk p. Red outlines identify cells with true risk at least .35. Gold outlines mark the best true-safe nonincreasing sequence.'}
+oldpar <- par(mfrow=c(2,2),mar=c(4.5,4.5,4.5,1))
+mean_cells <- aggregate(n~scenario+dose+cycle,stress_data$cells,mean)
+fills <- colorRampPalette(c("#F1F6FA","#175C96"))(101)
+for(id in 7:10) {
+  z <- subset(mean_cells,scenario==id)
+  p <- stress_truth(stress_parameters)[[id]]
+  best <- strsplit(stress_audit_table$optimal_down[id],",",fixed=TRUE)[[1]]
+  plot(NA,xlim=c(.5,3.5),ylim=c(.5,3.5),axes=FALSE,xlab="Cycle",ylab="Dose",
+       main=paste0("S",id,": allocation and truth"),xaxs="i",yaxs="i")
+  axis(1,at=1:3,labels=1:3);axis(2,at=1:3,labels=1:3,las=1)
+  for(row in seq_len(nrow(z))) {
+    d<-z$dose[row];j<-z$cycle[row];n<-z$n[row]
+    rect(j-.48,d-.48,j+.48,d+.48,col=fills[1+round(100*n/15)],border="white")
+    if(p[d,j]>=.35)rect(j-.46,d-.46,j+.46,d+.46,border="#CE4B4B",lwd=2)
+    if(length(best)==3 && d==as.integer(best[j]))rect(j-.42,d-.42,j+.42,d+.42,border="#D5A021",lwd=2)
+    text(j,d,sprintf("n %.2f\np %.3f",n,p[d,j]),col=if(n>8)"white" else "#162D3D",cex=.9)
+  }
+}
+par(oldpar)
+```
 
-$$
-C_C(0.20,0.20,1;1)=\frac19.
-$$
+```{r stress-coverage-and-burden, eval=stress_available}
+s <- stress_summary
+knitr::kable(data.frame(Scenario=s$scenario,Optimal_path_observed=percent(s$coverage),
+  Selection_given_observed=percent(s$conditional_pcs),Fallback=percent(s$fallback),
+  Mean_patients=round(s$mean_enrolled,2),Mean_evaluated_cycles=round(s$mean_cycles,2),
+  Mean_DLTs=round(s$mean_dlts,2)),
+  col.names=c("Scenario","Optimum observed","Selection given observed","Fallback","Mean patients","Mean cycles","Mean DLTs"))
+```
 
-Consequently,
+At `r format(stress_n,big.mark=',')` trials per scenario, a binary probability's
+MCSE is at most `r round(100*.5/sqrt(stress_n),2)` percentage points. Conditional
+selection uses only trials observing an optimum and has a smaller denominator.
+Unsafe exposure is a ratio of evaluated patient-cycles, not a trial probability.
+Early stopping is separated from final no recommendation and fallback use.
+These four scenarios change both marginal risks and exploration difficulty;
+performance differences alone cannot identify a causal effect of PAVA.
 
-$$
-\begin{aligned}
-\Pr(\text{DLT in cycle 2}\mid\text{DLT in cycle 1})
-&=\frac{1/9}{0.20}=\frac59\approx0.556,\\
-\Pr(\text{DLT in cycle 2}\mid\text{no DLT in cycle 1})
-&=\frac{0.20-1/9}{0.80}=\frac19\approx0.111.
-\end{aligned}
-$$
+## What the four results show
 
-These conditional probabilities average back to 0.20. Under the original
-independent generator, both would be 0.20. The example uses fixed doses;
-in BaSyc the prior outcome also changes the next dose. De-escalated
-patients can therefore be enriched for susceptibility, while escalating
-patients can be selected for tolerance.
+```{r stress-interpretation, results='asis', eval=stress_available}
+s7 <- subset(stress_summary,scenario==7)
+s8 <- subset(stress_summary,scenario==8)
+s9 <- subset(stress_summary,scenario==9)
+s10 <- subset(stress_summary,scenario==10)
+cat(sprintf('**S7 and S8: exploration is the main ceiling on selection.** The true optima 222 and 331 were observed in %s and %s of trials, respectively. Overall optimal selection was %s and %s; conditional on observation, it was %s and %s. Failure to observe the optimum therefore explains most selection failures. Both scenarios contain only true-safe cells, so zero unsafe recommendation/exposure is guaranteed by construction. Early stopping still occurred in %s and %s under the unchanged posterior rules.\n\n',
+ percent(s7$coverage),percent(s8$coverage),percent(s7$optimal_down),percent(s8$optimal_down),
+ percent(s7$conditional_pcs),percent(s8$conditional_pcs),percent(s7$early_stop),percent(s8$early_stop)))
 
-This distinguishes a **fixed-dose marginal risk** from the risk among
-patients actually assigned to that cell:
+# A true order reversal can constrain PAVA only if both paths are observed
+# and survive screening. Joint observation is a necessary, insufficient check.
+joint_reversal <- data.frame(scenario=7:10,trials=integer(4))
+for(id in 7:10) {
+ z <- subset(stress_data$sequence_truth,scenario==id)
+ reversed <- which(outer(z$intensity,z$intensity,'<') &
+   outer(z$q,z$q,function(a,b)a-b>1e-12) & outer(z$safe,z$safe,'&'),arr.ind=TRUE)
+ paths <- subset(stress_data$paths,scenario==id)
+ by_sequence <- lapply(split(paths$trial,paths$sequence),unique)
+ observed <- integer()
+ if(nrow(reversed)) for(k in seq_len(nrow(reversed)))
+   observed <- union(observed,intersect(by_sequence[[z$sequence[reversed[k,1]]]],
+                                         by_sequence[[z$sequence[reversed[k,2]]]]))
+ joint_reversal$trials[joint_reversal$scenario==id] <- length(observed)
+}
+cat(sprintf('**How often is the misspecified order exposed to data?** A reversed pair of true-safe sequences was jointly observed in only %s of S7 trials and %s of S8 trials. Final posterior screening may reduce these sets further. Thus these 15-patient experiments reveal a substantial exploration limitation; their low selection rates do not establish that intensity misspecification or PAVA caused the failures.\n\n',
+ percent(joint_reversal$trials[1]/stress_n),percent(joint_reversal$trials[2]/stress_n)))
+cat(sprintf('**S9: the nonincreasing recommendation restriction is structurally costly.** The design selected its best allowed safe sequence, 111, in %s of trials. The unrestricted optimum, 122, cannot be recommended. Unsafe recommendations occurred in %s, and %s of evaluated cycles used cells with true risk at least .35. Decreasing cycle toxicity makes safe later escalation relevant, while the unchanged final class excludes it.\n\n',
+ percent(s9$optimal_down),percent(s9$unsafe),percent(s9$unsafe_exposure)))
+cat(sprintf('**S10: recovery creates a second restriction problem.** The best allowed safe sequence, 211, was selected in %s of trials, while unrestricted 213 is unavailable to the final selector. Unsafe recommendation was %s. D2/C2 has risk .351, only .001 above the .35 truth boundary; its classification should be read alongside the more toxic early D3 cells in the heatmap. This scenario violates global intensity order, but not order between two true-safe paths.\n\n',
+ percent(s10$optimal_down),percent(s10$unsafe)))
+```
 
-$$
-\begin{aligned}
-\Pr(Y_{dj}=1)&=p_{dj},\\
-\Pr(Y_{dj}=1\mid D_j=d,\ \text{earlier observed history})
-&\ \text{may differ from }p_{dj}.
-\end{aligned}
-$$
+## Functions called and rerunning
 
-The first probability remains fixed in the copula experiment. The second
-equals that margin in the original independent construction, but need not
-do so under dependence. Later-cycle empirical cell rates can therefore
-shift even when the copula generator has correct fixed-dose margins.
-There is no guarantee that dependence always increases early stopping
-or unsafe recommendations.
+`stress_probability()` generates the risk matrix; `stress_sequences()` and
+`stress_audit()` enumerate the truth and its assumptions.
+`run_assumption_stress()` calls **the existing `simulate_table3()`**, which
+calls `run_basyc()` and `select_mts()` with the original saved settings.
+`summarize_assumption_stress()` summarizes saved data only. The simulator's
+new optional `truth` argument changes input risks, not trial decisions.
+Fixed per-trial seeds preserve worker-count independence and the original
+six-scenario behavior. New seeds follow the same rule, using scenario IDs 7--10.
 
-Cycle 1 is a useful control: a new patient's vector is independent of
-previous patients, and the first dose is chosen before that patient's own
-outcomes are known. Its assigned-cell risk should still agree with $p_{d1}$.
-History-specific summaries should record any previous DLT and the previous
-dose, with full histories retained for review.
+From a **local terminal** in the shared project folder:
 
-## How the proposed experiment would be carried out
+```bash
+bash unity.sh 10000 auto 2018 stress
+```
 
-The parameters are known simulation inputs. They are not estimated from
-an individual 15-patient trial. Use all six saved surfaces and the common
-tau grid above: one independence setting and six dependent settings per
-scenario, or **42 conditions**. At 10,000 trials per condition this means
-420,000 trial replicates, including 60,000 independent baseline trials;
-the nonzero-dependence conditions require 360,000 new trial replicates.
-This remains a proposal, not a request to launch those runs now.
+This uploads changed sources, gives Unity the exact original saved benchmark,
+requests available Slurm cores, runs the four scenarios, downloads the single
+`data/assumption_stress.rds`, and renders this Rmd. The original `table3.rds`
+is retained. On an allocated compute node, the equivalent R command is:
 
-1. **Freeze the benchmark.** Use the current saved settings, marginal risks,
-   safety definition and true MTS. Keep the pending PAVA tie change and any
-   new safety/fallback rule outside this first dependence comparison.
+```bash
+Rscript --vanilla Lyu_2018/R/assumption_stress.R 10000 32 2018
+```
 
-2. **Use the same base random numbers across conditions.** Retain the
-   original 15-by-3 independent-uniform bank and its draw order for each
-   trial. Draw one extra shared number per patient after that bank, or from
-   a documented auxiliary stream. Different trial replicates use independent
-   banks; reuse each trial's bank across the compared conditions. Transform
-   these numbers using the
-   Gaussian or Clayton construction. At tau zero, return the original
-   uniforms directly and reproduce every saved trial, cell and completed
-   path record before reusing the existing baseline. **Do not redraw a
-   fresh independent number after an intrapatient dose decision.**
-
-3. **Validate the generator before running a trial design.** Plan 200,000
-   independent latent patients for each of the seven settings, applying
-   all six surfaces and all 27 fixed sequences. Check uniform margins,
-   latent tau, the dose monotonicity of potential outcomes, fixed-dose DLT
-   rates, pairwise and three-cycle probabilities, and the distribution of
-   the full-cycle count $K$. Use the copula CDF for analytic joint targets
-   and inclusion-exclusion for any/multiple-DLT probabilities. Account for
-   Monte Carlo uncertainty across the collection of checks, record normal
-   CDF tolerances, and require exact behavior when a risk is zero or one.
-
-4. **Reveal outcomes in the usual trial order.** Give each potential patient
-   one pre-generated vector. Assign doses using observed history only;
-   reveal only outcomes at assigned doses when follow-up is due. Apply the
-   unchanged counting, DCR, exclusion and global-monitoring order, then the
-   unchanged recommendation and fallback. Save data before rendering.
-
-5. **Retain decision, exposure and patient-burden outcomes.** Record exact
-   MTS selection; safe, unsafe and no recommendation; coverage and selection
-   given coverage; unsafe exposure; enrollment, completion and evaluated
-   cycles; and observed any/multiple DLTs. Retain the first stop's time,
-   triggering cycle, numerator, denominator, posterior risk and monitoring
-   activation time, plus fallback use and patient dose/outcome histories.
-   Keep unobserved cycles missing. Interpret observed DLT counts alongside
-   follow-up length and keep them separate from full fixed-sequence counts.
-
-6. **Compare paired trial results with uncertainty.** Compare each condition
-   with independence and compare the families at matching tau. Because
-   conditions reuse base patients, use the standard deviation of paired
-   trial differences divided by the square root of the trial count for
-   mean differences. For ratios, conditional quantities and history strata,
-   resample whole paired trials. Report 95% Monte Carlo intervals, counts
-   for sparse groups, and all prespecified conditions. A single probability
-   from 10,000 trials has MCSE at most 0.5 percentage points; other metrics
-   have their own uncertainty.
-
-For each dose/cycle, also compare the observed DLT fraction with $p_{dj}$.
-At independence, its difference should be compatible with zero; under
-dependence, later-cycle departures can reflect selection by history.
-Generator validation and the cycle-1 control help distinguish that mechanism
-from a coding error.
-
-Read the results through the questions in Sections 1--4: did the design
-fail to explore the true path, fail to recognize it after exploring it,
-or deliver an undesirable toxicity burden despite selecting it? Plot those
-metrics and global stopping against tau, together with stopping time,
-exposure and patient burden. A stable recommendation rate alone does not
-establish robustness. This experiment evaluates the current design under
-chosen dependence models; it does not identify the generator used in the
-paper. A future objective based on repeated toxicity, rather than marginal
-TPC, would need its own dependence-specific true optimum.
-
+Knitting this document never starts a simulation. The source checksums,
+clinical-setting comparison, scenario inputs, full trial/cell/completed-path
+records, runtime and Slurm metadata are stored together in the RDS.
 
 # References
 
 - [Lyu, Curran and Ji (2018), BaSyc](https://doi.org/10.1200/PO.18.00020):
-  source of the dose/cycle design and the marginal simulation scenarios.
-  The benchmark here is the current coded version with its recorded conventions.
-- [Hofert, Kojadinovic, Maechler and Yan, *Elements of Copula Modeling with R*, Chapter 2](https://copula.r-forge.r-project.org/book/02_copulas.html):
-  Gaussian/Clayton constructions, Kendall-tau relationships and tail coefficients.
-- [Marshall and Olkin (1988), *Families of Multivariate Distributions*](https://doi.org/10.1080/01621459.1988.10478671):
-  mixture-based construction underlying the shared-frailty sampling approach.
-- [The `copula` package's Clayton implementation](https://github.com/cran/copula/blob/master/R/claytonCopula.R):
-  explicit gamma-frailty generation with shape $1/\theta$ and rate one,
-  including an independence branch.
-- [Cunanan and Koopmeiners (2014), copula misspecification in Phase I--II trials](https://pmc.ncbi.nlm.nih.gov/articles/PMC4234400/):
-  precedent for separating a data-generating association model from a fitted
-  working model. Its efficacy/toxicity setting differs from this repeated-cycle
-  experiment; the present protocol makes its own robustness assessment.
+  trial rules and original six simulation scenarios. The additional scenarios
+  and risk surface above are constructed stress tests.

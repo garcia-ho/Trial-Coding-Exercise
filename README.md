@@ -14,7 +14,7 @@ multicycle BaSyc design of Lyu et al. (2018).
 - `Drug_combo_Boin/Drug_combo_Boin.html`: rendered combination-BOIN report
 - `Lyu_2018/reproduce_table2.Rmd`: BaSyc formulas, Table 2 replay and checks
 - `Lyu_2018/reproduce_table2.html`: rendered BaSyc report
-- `Lyu_2018/simulation_exploration.Rmd`: saved-result allocation and scenario analysis, with a conceptual copula stress-test proposal
+- `Lyu_2018/simulation_exploration.Rmd`: saved-result allocation, scenario analysis and marginal-assumption stress tests
 - `Lyu_2018/simulation_exploration.html`: rendered exploration report
 - `Lyu_2018/R/`: commented mTPI-2, allocation, safety, MTS and table functions
 - `Lyu_2018/validate.R`: independently runnable reproduction checks
@@ -219,9 +219,41 @@ without sourcing the simulator or generating trial outcomes. It displays
 recommendation categories, dose/cycle allocation bars and heatmaps, completed
 patient transitions, and true-MTS coverage versus selection. Scenario-specific
 interpretations distinguish exploration, selection and patient exposure.
-The copula proposal defines notation, one-parameter exchangeable Gaussian
-and Clayton generators, matched Kendall-tau settings, fixed-sequence validation,
-an adaptive trial procedure, paired Monte Carlo comparisons and interpretation.
-The former cycle-trend section and the more complex copula extensions are removed.
-No copula generator or new simulation is implemented. Knit this report separately
-when the saved RDS changes; `unity.sh` continues to render the reproduction report.
+The active extension adds four marginal-risk stress scenarios, keeping the saved
+clinical settings and independent patient/cycle random numbers unchanged.
+
+- `Lyu_2018/R/assumption_stress.R`: commented truth, audit, scoring and run helpers;
+  calls the existing `simulate_table3()`, `run_basyc()` and `select_mts()`.
+- `Lyu_2018/data/assumption_stress.rds`: one saved dataset for S7--S10, with
+  raw records, truth parameters, rule checks, source checksums, runtime and job details.
+- `Lyu_2018/simulation_exploration.Rmd`: existing Sections 1--4, followed by the
+  formula for all original/new scenarios, an adjustable offline truth graph,
+  and the saved stress-test results and figures. Knit never runs simulations.
+- `Lyu_2018/copula_proposal.Rmd`: independent, deferred copula proposal;
+  no copula generator or simulation is implemented.
+
+From a local terminal in the shared project root, run the four additional
+scenarios (10,000 trials each) and automatically retrieve/render the results:
+
+```sh
+bash unity.sh 10000 auto 2018 stress
+```
+
+The optional fourth argument defaults to `table3`; the original six-scenario
+command is unchanged. Both modes use the same adaptive Slurm allocation and
+upload/run/download workflow. The stress mode uploads the exact `table3.rds`
+benchmark as a read-only reference for inherited trial settings, and downloads
+only `assumption_stress.rds`. It leaves the local original result intact.
+Its single remote log is `Lyu_2018/assumption_stress.log`.
+To reuse an authenticated connection, prefix either command with
+`UNITY_SOCKET=/Users/jesush/.ssh/asc-unity.sock`.
+
+The common truth formula is `min(1, b[d] * r^(j-1) * c^((j-1)*(j-2)/2))`.
+Every original scenario has `r=1.1,c=1` and its original three first-cycle
+risks. S7/S8 reverse intensity ordering between truly safe sequences while
+cycle risks still increase; S9 reverses the cycle columns of S1 while
+preserving intensity ordering; S10 rises then recovers and violates global
+intensity ordering. All preserve within-cycle dose monotonicity.
+S9/S10 are scored against both the nonincreasing recommendation class and
+an unrestricted safe oracle, making structural recommendation loss explicit.
+These are constructed stress tests, not additional published scenarios.

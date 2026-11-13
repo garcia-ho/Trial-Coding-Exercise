@@ -38,13 +38,14 @@ simulate_table3 <- function(nsim = 10000L, cores = 32L, seed = 2018L,
                             weights = "equal", nearest_tie = "higher",
                             safety_min_n = 4L, scenarios = 1:6,
                             mts_screen_min_n = 0L, no_mts_fallback = "restricted_revote",
-                            global_monitor = "after_first_sequence") {
+                            global_monitor = "after_first_sequence",
+                            truth = lyu_scenarios()) {
   start_time <- proc.time()[["elapsed"]]
   stopifnot(length(nsim) == 1, nsim >= 1, nsim <= 100000, nsim %% 1 == 0,
-            length(seed) == 1, seed >= 1, seed <= .Machine$integer.max - 700000,
+            length(seed) == 1, seed >= 1, seed <= .Machine$integer.max - length(truth) * 100000,
             seed %% 1 == 0, safety_min_n %in% c(0, 3, 4), mts_screen_min_n %in% c(0, 3),
             length(cores) == 1, cores >= 1, cores %% 1 == 0,
-            length(scenarios) > 0, all(scenarios %in% 1:6), !anyDuplicated(scenarios))
+            length(scenarios) > 0, all(scenarios %in% seq_along(truth)), !anyDuplicated(scenarios))
   # Never use more cores than Slurm allocated to this R process.
   allocated <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = cores))
   cores <- min(as.integer(cores), allocated, length(scenarios) * nsim)
@@ -54,7 +55,8 @@ simulate_table3 <- function(nsim = 10000L, cores = 32L, seed = 2018L,
   nearest_tie <- match.arg(nearest_tie, c("lower", "higher"))
   no_mts_fallback <- match.arg(no_mts_fallback, c("restricted_revote", "none"))
   global_monitor <- match.arg(global_monitor,c("continuous","after_first_sequence"))
-  truth <- lyu_scenarios()
+  # Optional truth surfaces reuse this exact engine in the stress study.
+  # The default remains the original six scenarios; no decision rule changes.
   target_mts <- vapply(truth, lyu_true_mts, character(1))
   # Strict intratrial n > 3 is implemented as minimum n=4 in the shared
   # safety checks (global stop, DCR and permanent dose exclusion).
